@@ -93,11 +93,12 @@ int main(int argc, char* argv[])
         {
             printf("Initializarea mutex nu a reusit");
         }
-
+        pthread_create(&recv_thread, NULL, &receive_function, NULL);
         pthread_create(&speed_thread, NULL, &speed_update, NULL);
         pthread_create(&command_thread, NULL, &commands_send, NULL);
         pthread_join(command_thread, NULL);
         pthread_join(speed_thread, NULL);
+        pthread_join(recv_thread, NULL);
         
         pthread_mutex_destroy(&lock);
         exit(1);
@@ -139,6 +140,40 @@ void *speed_update(void *arg)
             send_function(viteza_str);
             sleep(60);
         }
+    }
+}
+void *receive_function(void *arg)
+{
+    while(1)
+    {
+        char lungime_str[3];
+        int lungime_int;
+        fflush(stdout);
+        fflush(stdin);
+
+        int stop;
+        
+        if((stop=read(sock_d, lungime_str, sizeof(lungime_str)))<0)
+        {
+            perror("[client] Eroare la citirea lungimii in server");
+            return errno;
+        }
+        
+        if(stop == 0)
+            break;
+        
+        lungime_int = atoi(lungime_str);
+        char *msg_primit = (char*)malloc(lungime_int);            
+        
+        if(read(sock_d, msg_primit, lungime_int+1)<0)
+        {
+            perror("[client] Eroare la citirea mesajului in server");
+            return errno;
+        } 
+        
+        if(stop == 0)
+            break;
+        printf("Mesaj primit:%s\n",msg_primit);
     }
 }
 

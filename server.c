@@ -50,8 +50,6 @@ void sigchld_handler(int s)
 
 int main(int argc, char*argv[])
 {
-
-
     //Ce comenzi poate sa primeasca serverul:
     char login[] = "Login";
     char sign_in[] = "Sign in";
@@ -94,7 +92,6 @@ int main(int argc, char*argv[])
     //setam portul
     server.sin_port = htons(PORT);
 
-    
     //atasam socket
     if (bind (sock_serv, (struct sockaddr *) &server, sizeof (struct sockaddr)) == -1)
     {
@@ -108,6 +105,7 @@ int main(int argc, char*argv[])
         perror("[server] Eroare la listen\n");
         return errno;
     }
+    //signal 
     struct sigaction sa;
     sa.sa_handler = sigchld_handler; // reap all dead processes
     sigemptyset(&sa.sa_mask);
@@ -126,7 +124,6 @@ int main(int argc, char*argv[])
     while(1)
     {
         fflush(stdout);
-   
         //acceptam un client
         int lenght = sizeof(from);
         sock_client = accept(sock_serv, (struct sockaddr *)&from, &lenght);
@@ -151,8 +148,10 @@ int main(int argc, char*argv[])
         //adaugam socketul clientului
         cl->sock_id = sock_client;
         add_client(cl);
-   
+
+        //handler pentru client
         int pid = fork();
+        
         if(pid == 0)
         {   
             fflush(stdout);
@@ -195,6 +194,24 @@ int main(int argc, char*argv[])
                 if(stop == 0)
                     break;
                 printf("Mesaj primit:%s\n",msg_primit);
+                //trimitere mesaje:
+                //---> o functie care proceseaza mesajul primit
+                
+                char msg_de_trimis[] = "BUNA";
+                lungime_int = strlen(msg_de_trimis);
+                bzero(&lungime_str, sizeof(lungime_str));
+                sprintf(lungime_str,"%d", lungime_int-1);
+                
+                if(write(uid-1, lungime_str, sizeof(lungime_str)) <= 0)
+                {
+                    perror("[server] Mesajul cu lungimea NU a fost trimis");
+                    return errno;
+                }
+                if(write(uid-1, msg_de_trimis, lungime_int) <= 0)
+                {
+                    perror("[server] Mesajul cu date NU a fost trimis");
+                    return errno;
+                }
             }//end while(1)
             exit(1);
         }//end if fork
