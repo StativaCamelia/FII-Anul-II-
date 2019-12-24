@@ -1,5 +1,6 @@
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <pthread.h>
 #include <netinet/in.h>
 #include <errno.h>
 #include <unistd.h>
@@ -18,6 +19,10 @@ sqlite3* db;
 //structura folosita de clienti
 static int uid = 10;
 
+pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+int logat;
+int cancel;
+
 typedef struct
 {
 int sock_id;
@@ -32,8 +37,11 @@ client_info *clients[MAXCLIENTS];
 void add_client(client_info * cl);
 void delete_client(int sock_id);
 void send_message_to_all(char* message);
-void send_msg(char *msg_trimis);
-void recv_msg(void *argc);
+
+void *send_news(char *msg_trimis);
+void *recv_msg(void *argc);
+void send_function(char *msg_de_trimis);
+
 int pregatire_raspuns(char *primit, char *raspuns, int logat, char* username);
 int functie_login(char* primit,char *raspuns, int logat, char* username);
 void get_user_and_pass(char* msg_primit, char* username, char* pass);
@@ -187,89 +195,116 @@ int main(int argc, char*argv[])
         
         if(pid == 0)
         {   
-            fflush(stdout);
-            fflush(stdin);
-
-            close(sock_serv);
-            int logat = 0;
-            char locatie[3];
-            char viteza[3];
-            int cancel = 0;
-
-            bzero(&locatie,sizeof(locatie));
-            bzero(&viteza, sizeof(viteza));
-
-            char lungime_str[3];
-            int lungime_int = 0;
-            int stop;
-
-            while(cancel != 1)
-            {
                 fflush(stdout);
                 fflush(stdin);
 
-                bzero(lungime_str, sizeof(lungime_str));
-        
-                if((stop=read(uid-1, lungime_str, sizeof(lungime_str)))<0)
-                {
-                    perror("[server] Eroare la citirea lungimii in server");
-                    return errno;
-                }
-                if(stop == 0)
-                    break;
-                lungime_int = atoi(lungime_str);
-                char *msg_primit = (char*)malloc(lungime_int);
-                memset(msg_primit, 0, sizeof(msg_primit));
-                if(read(uid-1, msg_primit, lungime_int+1)<0)
-                {
-                    perror("[server] Eroare la citirea mesajului in server");
-                    return errno;
-                } 
-                if(stop == 0)
-                    break;
-                printf("Mesaj primit:%s,%d\n", msg_primit, strlen(msg_primit));
-                //trimitere mesaje:
-
-                char msg_de_trimis[MSGSIZE];
-                char username[100];
-                bzero(&msg_de_trimis, sizeof(msg_de_trimis));
-                if(strstr(msg_primit, quit) != NULL)
-                {
-                    cancel = 1;
-                    sprintf(msg_de_trimis, "QUI: Urmeaza sa va deconectati...");
-                }
-                else
-                {
-                    logat = pregatire_raspuns(msg_primit, msg_de_trimis, logat, username);
-                }
-
-                msg_de_trimis[strlen(msg_de_trimis)] = '\0';
-                lungime_int = strlen(msg_de_trimis);
-                bzero(&lungime_str, sizeof(lungime_str));
-                sprintf(lungime_str,"%d", lungime_int);           
+                close(sock_serv);
+                logat = 0;
+                char locatie[3];
+                char viteza[3];
+                cancel = 0;
                 
-                if(write(uid-1, lungime_str, sizeof(lungime_str)) <= 0)
+                bzero(&locatie,sizeof(locatie));
+                bzero(&viteza, sizeof(viteza));
+
+                pthread_t recv_thread, news_thread;
+                
+                if(pthread_mutex_init(&lock, NULL))
                 {
-                    perror("[server] Mesajul cu lungimea NU a fost trimis");
-                    return errno;
+                    printf("Initializarea mutex nu a reusit");
                 }
-                if(write(uid-1, msg_de_trimis, lungime_int) <= 0)
-                {
-                    perror("[server] Mesajul cu date NU a fost trimis");
-                    return errno;
-                }
-                if(cancel == 1)
-                {
-                    close(uid-1);
-                    break;
-                }
-            }//end while(1)
-            exit(1);
+
+                pthread_create(&recv_thread, NULL, &recv_msg, NULL);
+                pthread_join(&recv_thread, NULL);
+                pthread_mutex_destroy(&lock);          
+        
+                exit(1);
         }//end if fork
         close(sock_client);
         close(uid-1);
     }
     sqlite3_close(db);
+}
+
+void send_function(char *msg_de_trimis)
+{
+    int lungime_int;
+    char lungime_str[3];
+    pthread_mutex_lock(&lock);
+    
+    lungime_int = strlen(msg_de_trimis);
+    sprintf(lungime_str,"%d", lungime_int-1);
+
+    if(write(uid-1, lungime_str, sizeof(lungime_str)) <= 0)
+    {
+        perror("[server] Mesajul cu lungimea NU a fost trimis");
+        return errno;
+    }
+    
+    if(write(uid-1, msg_de_trimis, lungime_int) <= 0)
+    {
+        perror("[server] Mesajul cu date NU a fost trimis");
+        return errno;
+    }
+    
+    pthread_mutex_unlock(&lock);
+}
+
+void *recv_msg(void *arg)
+{
+        char lungime_str[3];
+        int lungime_int = 0;
+        int stop;
+        cancel = 0;
+
+        while(cancel == 0)
+        {
+            fflush(stdout);
+            fflush(stdin);
+            bzero(lungime_str, sizeof(lungime_str));
+            
+            if((stop=read(uid-1, lungime_str, sizeof(lungime_str)))<0)
+            {
+                perror("[server] Eroare la citirea lungimii in server");
+                return errno;
+            }
+            
+            if(stop == 0)
+                break;
+
+            lungime_int = atoi(lungime_str);
+            
+            char *msg_primit = (char*)malloc(lungime_int);
+            memset(msg_primit, 0, sizeof(msg_primit));
+            
+            if(read(uid-1, msg_primit, lungime_int+1)<0)
+            {
+                perror("[server] Eroare la citirea mesajului in server");
+                return errno;
+            }
+
+            if(stop == 0)
+                break;
+            
+            printf("Mesaj pprimit:%s,%d\n", msg_primit, strlen(msg_primit));
+            //trimitere mesaje:
+            char msg_de_trimis[MSGSIZE];
+            char username[100];
+            
+            bzero(&msg_de_trimis, sizeof(msg_de_trimis));
+            if(strstr(msg_primit, quit) != NULL)
+            {
+                cancel = 1;
+                sprintf(msg_de_trimis, "QUI: Urmeaza sa va deconectati...");
+            }
+            else
+            {
+                logat = pregatire_raspuns(msg_primit, msg_de_trimis, logat, username);
+            }
+            msg_de_trimis[strlen(msg_de_trimis)] = '\0';
+            
+            send_function(msg_de_trimis);
+        } 
 }
     //adaug un client la lista actuala de clienti conectati la server
     void add_client(client_info * cl)
