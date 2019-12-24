@@ -1,4 +1,4 @@
-#include <sys/types.h>
+    #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <errno.h>
@@ -21,10 +21,9 @@ int port;
 
 //variabila care anunta inchiderea
 int cancel = 0;
-int logat = 0;
-
-fd_set master;
-fd_set read_fds;
+volatile int logat = 0;
+volatile int viteza_int = 0;
+volatile int start_location = 0;
 
 //FUCTII
 void print_meniu();
@@ -32,6 +31,7 @@ void print_meniu();
 void *receive_function(void *arg);
 void *speed_update(void *arg);
 void *commands_send(void *arg);
+void *location_update(void *arg);
 
 void send_function(char *msg_de_trimis);
 
@@ -40,7 +40,7 @@ void main_meniu();
 
 //mutex
 pthread_mutex_t lock =PTHREAD_MUTEX_INITIALIZER;
-
+pthread_mutex_t start =PTHREAD_MUTEX_INITIALIZER;
 //mesaje
 char msg_trimis[MSGSIZE];
 
@@ -49,18 +49,6 @@ int sock_d;
 
 int main(int argc, char* argv[])
 {       
-        /*
-        FD_ZERO(&master);
-        FD_ZERO(&read_fds);
-
-        FD_SET(0,&master);
-        FD_SET(sock_d,&master);
-        
-        if (select(sock_d+1, &read_fds, NULL,NULL,NULL) == -1)
-        {
-            perror("[server]Select");
-        }
-        */
         //structura server
         struct sockaddr_in server;
         /* cream socketul */
@@ -86,16 +74,25 @@ int main(int argc, char* argv[])
    
         print_meniu();
 
-        pthread_t speed_thread, recv_thread, command_thread;
-        int thread_1, thread_2;
+        pthread_t speed_thread, recv_thread, command_thread, location_thread;
+        int thread_1, thread_2, thread_3;
 
         if(pthread_mutex_init(&lock, NULL))
         {
             printf("Initializarea mutex nu a reusit");
         }
+
+        if(pthread_mutex_init(&start, NULL))
+        {
+            printf("Initializarea mutex nu a reusit");
+        }
+
+        pthread_create(&location_thread, NULL, &location_update, NULL);
         pthread_create(&recv_thread, NULL, &receive_function, NULL);
         pthread_create(&speed_thread, NULL, &speed_update, NULL);
         pthread_create(&command_thread, NULL, &commands_send, NULL);
+        
+        pthread_join(location_thread, NULL);
         pthread_join(command_thread, NULL);
         pthread_join(speed_thread, NULL);
         pthread_join(recv_thread, NULL);
@@ -111,46 +108,77 @@ void send_function(char *msg_de_trimis)
     pthread_mutex_lock(&lock);
     lungime_int = strlen(msg_de_trimis);
     sprintf(lungime_str,"%d", lungime_int-1);
+
     if(write(sock_d, lungime_str, sizeof(lungime_str)) <= 0)
     {
         perror("[client] Mesajul cu lungimea NU a fost trimis");
         return errno;
     }
+    
     if(write(sock_d, msg_de_trimis, lungime_int) <= 0)
     {
         perror("[client] Mesajul cu date NU a fost trimis");
         return errno;
     }
-    printf("%s", msg_de_trimis);
     pthread_mutex_unlock(&lock);
+}
+
+void *location_update(void* arg)
+{
+    char location_info[MSGSIZE];
+    char start_point[MSGSIZE];
+    char stop_point[MSGSIZE];
+    int begin = 0;
+    while(1)
+    {   
+        begin = logat;
+        fflush(stdin);
+        fflush(stdout);
+        if(begin == 1)
+        {   
+            printf("Introduceti locatia de start:");
+            fgets(start_point,sizeof(start_point), stdin);
+            printf("Introduceti destinatia:");
+            fgets(stop_point, sizeof(stop_point), stdin);
+            strcat(location_info, start_point);
+            strcat(location_info, stop_point);
+        }
+    }
 }
 
 void *speed_update(void *arg)
 {
-    int viteza_int;
-    char viteza_str[3];
-    if(logat == 0)
-    {
-        while(1)
-        {   fflush(stdin);
+    char viteza_str[MSGSIZE];
+    int begin = 0;
+    while(1)
+        {   
+            begin = logat;
+            fflush(stdin);
             fflush(stdout);
-            srand(time(NULL));
-            viteza_int = 80;
-            sprintf(viteza_str, "%d", viteza_int);
-            send_function(viteza_str);
-            sleep(60);
+            if(begin == 1 && start_location == 1)
+            {
+                srand(time(NULL));
+                viteza_int = rand()%70;
+                sprintf(viteza_str, "SPEED : %d", viteza_int);
+                //viteza_str[strlen(viteza_str)] = '\0';
+                send_function(viteza_str);
+                sleep(60);
+            }
         }
     }
-}
+
+
 void *receive_function(void *arg)
 {
-    while(1)
+    while(cancel == 0)
     {
         char lungime_str[3];
         int lungime_int;
+
         fflush(stdout);
         fflush(stdin);
-
+        memset(lungime_str,0,sizeof(lungime_str));
+    
         int stop;
         
         if((stop=read(sock_d, lungime_str, sizeof(lungime_str)))<0)
@@ -164,31 +192,95 @@ void *receive_function(void *arg)
         
         lungime_int = atoi(lungime_str);
         char *msg_primit = (char*)malloc(lungime_int);            
-        
+        memset(msg_primit, 0, sizeof(msg_primit));
         if(read(sock_d, msg_primit, lungime_int+1)<0)
         {
             perror("[client] Eroare la citirea mesajului in server");
             return errno;
         } 
-        
+        char *pch;
+        if(strstr(msg_primit, "LOK") != NULL)
+        {
+            logat = 1;
+        }
+        else if(strstr(msg_primit, "IOK") != NULL)
+        {
+            logat = 1;
+        }
+        else if(strstr(msg_primit, "QUI"))
+        {
+            cancel = 1;
+            close(sock_d);
+        }
         if(stop == 0)
             break;
-        printf("Mesaj primit:%s\n",msg_primit);
+        printf("%s\n",msg_primit+4);
     }
 }
+
 
 void *commands_send(void *arg)
 {
     char commanda[MSGSIZE];
-    while(1)
+    char username[MSGSIZE];
+    char password[MSGSIZE];
+    
+    while(cancel == 0)
     {
-        bzero(&commanda,sizeof(msg_trimis));
+        bzero(&commanda,sizeof(commanda));
+        
         fflush(stdin);
         fflush(stdout);
+        
         read(0, commanda, sizeof(commanda));
-        send_function(commanda);
-    }
+        
+        if(strstr(commanda, "Login") != NULL && logat == 0)
+        {  
+            fflush(stdout);
+            fflush(stdin);
+            printf("Introduceti numele utilizatorului:");
+            fgets(username, sizeof(username), stdin);
+            
+            fflush(stdin);
+            fflush(stdout);
+            printf("Introduceti parola utilizatorului:");
+            fgets(password, sizeof(password), stdin);
+
+            strcat(commanda, username);
+            strcat(commanda, password);
+            commanda[strlen(commanda)] = '\0';
+            send_function(commanda);
+        }
+        else if(strstr(commanda, "Sign in") != NULL && logat == 0)
+        {
+            fflush(stdout);
+            fflush(stdin);
+            printf("Alegeti un nume de utilizator:");
+            read(0,username, sizeof(username));
+            
+            fflush(stdin);
+            fflush(stdout);
+            printf("Introduceti parola noului cont:");
+            read(0,password, sizeof(password));
+
+            strcat(commanda, username);
+            strcat(commanda, password);
+            commanda[strlen(commanda)] = '\0';
+            send_function(commanda);
+        }
+        else if(strstr(commanda, "Quit") != NULL)
+        {
+            cancel = 1;
+
+        }
+        else{
+
+            commanda[strlen(commanda)] = '\0';
+            send_function(commanda);
+        }
+        }   
 }
+
 void print_meniu()
 {
      //---------------->MENIU<------------------

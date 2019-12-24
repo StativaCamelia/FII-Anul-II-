@@ -7,7 +7,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <sys/wait.h>
-#include <sqlite3.h>
+#include "sqlite3.h"
 
 #define PORT 2019 //PORTUL FOLOSIT
 #define MSGSIZE 500
@@ -32,10 +32,15 @@ client_info *clients[MAXCLIENTS];
 void add_client(client_info * cl);
 void delete_client(int sock_id);
 void send_message_to_all(char* message);
-void print_clients();
-
 void send_msg(char *msg_trimis);
 void recv_msg(void *argc);
+int pregatire_raspuns(char *primit, char *raspuns, int logat, char* username);
+int functie_login(char* primit,char *raspuns, int logat, char* username);
+void get_user_and_pass(char* msg_primit, char* username, char* pass);
+int functie_sign_in(char* msg_primit, char* raspuns, int logat, char* username);
+void functie_help(char* raspuns);
+void functie_help_main(char* raspuns);
+
 
 extern int errno;
 
@@ -48,18 +53,52 @@ void sigchld_handler(int s)
     errno = saved_errno;
 }
 
-int main(int argc, char*argv[])
+static int callback_insert(void *data, int argc, char **argv, char **azColName) {
+   int i;
+   fprintf(stderr, "%s: ", (const char*)data);
+   char *rasp = (char*) data;
+   for(i = 0; i<argc; i++) {
+      sprintf(rasp,"%s = %s\n", azColName[i], argv[i] ? argv[i] : "NULL");
+   }
+   strcat(rasp,"\n");
+   return 0;
+}
+
+static int callback(void *data, int argc, char **argv, char **azColName)
 {
-    //Ce comenzi poate sa primeasca serverul:
+   int i;
+   fprintf(stderr, "%s: ", (const char*)data);
+   char *rasp = (char*)data;
+   for(i = 0; i<argc; i++)
+   {
+      strcat(rasp, azColName[i]);
+      strcat(rasp, ":");
+      argv[i] ? strcat(rasp,argv[i]) : strcat(rasp,"NULL");
+      strcat(rasp, "\n");
+   }
+   strcat(rasp, "\n");
+   return 0;
+}
+
+//Ce comenzi poate sa primeasca serverul:
     char login[] = "Login";
     char sign_in[] = "Sign in";
     char traffic_info[] = "Trafic info";
     char update_settings[] = "Update Settings";
     char update_location[] = "Update Location";
     char update_speed[] = "Update Speed"; 
-    char quit[] = "QUIT";
+    char quit[] = "Quit";
     char help[] = "Help";
 
+
+int main(int argc, char*argv[])
+{
+    int data_base = sqlite3_open("Monitorizare_Trafic.db", &db);
+    if(data_base)
+    {
+        fprintf(stderr, "Baza de date nu poate fi deschisa: %s\n", sqlite3_errmsg (db));
+        return 0;
+    }
     //structura folosita de server
     struct sockaddr_in server;
 
@@ -158,7 +197,7 @@ int main(int argc, char*argv[])
             fflush(stdin);
 
             close(sock_serv);
-            int ok_logat = 0;
+            int logat = 0;
             char locatie[3];
             char viteza[3];
             int cancel = 0;
@@ -169,6 +208,7 @@ int main(int argc, char*argv[])
             char lungime_str[3];
             int lungime_int = 0;
             int stop;
+
             while(1)
             {
                 fflush(stdout);
@@ -185,7 +225,7 @@ int main(int argc, char*argv[])
                     break;
                 lungime_int = atoi(lungime_str);
                 char *msg_primit = (char*)malloc(lungime_int);
-                
+                memset(msg_primit, 0, sizeof(msg_primit));
                 if(read(uid-1, msg_primit, lungime_int+1)<0)
                 {
                     perror("[server] Eroare la citirea mesajului in server");
@@ -193,14 +233,26 @@ int main(int argc, char*argv[])
                 } 
                 if(stop == 0)
                     break;
-                printf("Mesaj primit:%s\n",msg_primit);
+                //printf("Mesaj primit:%s,%d\n", msg_primit, strlen(msg_primit));
                 //trimitere mesaje:
-                //---> o functie care proceseaza mesajul primit
-                
-                char msg_de_trimis[] = "BUNA";
+
+                char msg_de_trimis[MSGSIZE];
+                char username[100];
+                bzero(&msg_de_trimis, sizeof(msg_de_trimis));
+                if(strstr(msg_primit, quit) != NULL)
+                {
+                    cancel = 1;
+                    sprintf(msg_de_trimis, "Urmeaza sa va deconectati...");
+                }
+                else
+                {
+                    logat = pregatire_raspuns(msg_primit, msg_de_trimis, logat, username);
+                }
+
+                msg_de_trimis[strlen(msg_de_trimis)] = '\0';
                 lungime_int = strlen(msg_de_trimis);
                 bzero(&lungime_str, sizeof(lungime_str));
-                sprintf(lungime_str,"%d", lungime_int-1);
+                sprintf(lungime_str,"%d", lungime_int);           
                 
                 if(write(uid-1, lungime_str, sizeof(lungime_str)) <= 0)
                 {
@@ -212,12 +264,18 @@ int main(int argc, char*argv[])
                     perror("[server] Mesajul cu date NU a fost trimis");
                     return errno;
                 }
+                if(cancel == 1)
+                {
+                    close(uid-1);
+                    break;
+                }
             }//end while(1)
             exit(1);
         }//end if fork
         close(sock_client);
-        close(uid);
+        close(uid-1);
     }
+    sqlite3_close(db);
 }
     //adaug un client la lista actuala de clienti conectati la server
     void add_client(client_info * cl)
@@ -261,6 +319,165 @@ void send_message_to_all(char* message)
                 perror("[server] Eroare la scriere in send_to_all");
                 break;
             }
+        
+        }    
+    }
+}
+
+int pregatire_raspuns(char *msg_primit, char *msg_de_trimis, int logat, char* username)
+{
+    if(strstr(msg_primit, login) != NULL)
+    {
+        logat = functie_login(msg_primit, msg_de_trimis, logat, username);
+    }
+    else if(strstr(msg_primit, sign_in) != NULL)
+    {
+        logat = functie_sign_in(msg_primit, msg_de_trimis, logat, username);
+    }
+    else if(strstr(msg_primit, help) != NULL && logat == 0)
+    {
+        logat = logat;
+        functie_help_login(msg_de_trimis);
+    }
+    else if(strstr(msg_primit, help) != NULL && logat == 1)
+    {
+        logat = logat;
+        functie_help_main(msg_de_trimis);
+    }
+    else 
+    {   
+        sprintf(msg_de_trimis, "ERR: Comanda introdusa nu exista");
+        logat = logat;
+    }
+    return logat;
+}
+
+
+void functie_help_login(char* msg_de_trimis)
+{
+    strcat(msg_de_trimis, "Pentru Login introduce comanda <Login>, ulterior vi se vor solicita username-ul si parola, asociate contului\n");
+    strcat(msg_de_trimis, "Pentru sign_in ntorduceti comanda <Sign_in>, ulteror vi se vor solicita username-ul si parola noului cont\n");
+    strcat(msg_de_trimis, "Pentru a parasi aplicatie introduceti comanda <Quit>");
+}
+
+void functie_help_main(char* msg_de_trimis)
+{
+    strcat(msg_de_trimis, "Aplicatie este destinata monitorizarii traficului, drept urmare pozitia respectiv viteza dumneaavoastra sunt utilizate in acest scop\n");
+    strcat(msg_de_trimis, "In acest fel urmeaza a fi instintati cu privire la evenimentele petrecute in trafic si respectiv cu privire la restrictiile de viteza\n");
+    strcat(msg_de_trimis, "Daca doriti raportarea unui eveniment introduceti comanda <Trafic Info>, urmata de mesajul dumneavoastra");
+    strcat(msg_de_trimis, "Daca doriti sa va abonati la stirile legate de vreme, statii peco, etc, introduceti comanda <Settings Update>");
+}
+
+
+void get_user_and_pass(char* msg_primit, char *username, char *pass)
+{
+
+    memset(username, 0, sizeof(username));
+    memset(pass, 0, sizeof(pass));
+    char copy[MSGSIZE];
+    strcpy(copy, msg_primit);
+    char *ptr = strtok(copy, "\n");
+    ptr = strtok(NULL, "\n");
+    sprintf(username, "%s", ptr);
+    ptr = strtok(NULL, "\n");
+    sprintf(pass,"%s", ptr);
+}
+
+int functie_sign_in(char* msg_primit, char *msg_de_trimis, int logat, char *username)
+{
+    char pass[100];
+    char sql[MSGSIZE];
+    char data[MSGSIZE];
+    //data[0] = 0;
+    sql[0] = 0;
+    char *zErrMsg = 0;
+
+    if(logat == 1)
+    {
+        sprintf(msg_de_trimis, "INU:Utilizatorul %s este deja logat", username);
+        logat = logat;
+    }
+    else
+    {
+        get_user_and_pass(msg_primit, username, pass);
+        //trebuie verificat daca exista sau nu
+        sprintf(sql, "SELECT Username FROM Clienti");
+        memset(data, 0, sizeof(data));
+        int rc;
+        rc = sqlite3_exec(db, sql, callback, data, &zErrMsg);
+        if( rc != SQLITE_OK)
+        {
+            printf("SQL error: %s\n", zErrMsg);
+            sqlite3_free(zErrMsg);
         }
-    }    
+        else if(strstr(data, username)!=NULL)
+        {
+            sprintf(msg_de_trimis,"INU:Username-ul %s nu este disponibil\n", username);
+            logat = 0;
+        }
+        else
+        {
+            memset(sql, 0, sizeof(sql));
+            sprintf(sql, "INSERT INTO Clienti (Username, Password, Options) VALUES('%s','%s',0);",username, pass);
+            memset(data, 0, sizeof(data));
+            rc = sqlite3_exec(db, sql, callback, data, &zErrMsg);
+            if( rc != SQLITE_OK) 
+            {
+                printf("SQL error: %s\n", zErrMsg);
+                sqlite3_free(zErrMsg);
+            }
+            else
+            {
+                sprintf(msg_de_trimis, "IOK:Inregistrarea s-a facut cu succes\n");
+                logat = 1;
+            }
+
+        }
+    }
+    fflush(stdout);
+    fflush(stdin);
+    return logat;
+}
+
+
+int functie_login(char *msg_primit, char *msg_de_trimis, int logat, char*username)
+{   
+    char pass[MSGSIZE];
+    char sql[MSGSIZE];
+    char data[MSGSIZE];
+    //data[0] = 0;
+    sql[0] = 0;
+    char *zErrMsg = 0;
+    if(logat == 1)
+    {
+        sprintf(msg_de_trimis, "Utilizatorul %s este deja logat\n", username);
+        logat = logat;
+    }
+    else
+    {   
+        get_user_and_pass(msg_primit, username, pass);
+        sprintf(sql, "SELECT * from Clienti where Username = '%s'",username);
+        int rc;
+        memset(msg_de_trimis, 0 , sizeof(msg_de_trimis));
+        memset(data, 0, sizeof(data));
+        rc = sqlite3_exec(db, sql, callback, data, &zErrMsg);
+        if( rc != SQLITE_OK) 
+        {
+            printf("SQL error: %s\n", zErrMsg);
+            sqlite3_free(zErrMsg);
+        }
+        else if (strstr (data, username))
+        {   
+            sprintf (msg_de_trimis,"LOK:Utilizatorul %s s-a logat cu succes.\n", username);
+            logat = 1;
+        }
+        else
+        {
+            sprintf(msg_de_trimis, "LNU:Username-ul %s nu exista\n", username);
+            logat = 0;
+        }
+    }
+    return logat;
+    fflush(stdout);
+    fflush(stdin);
 }
