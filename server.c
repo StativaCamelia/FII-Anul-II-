@@ -38,7 +38,7 @@ int pregatire_raspuns(char *primit, char *raspuns, int logat, char* username);
 int functie_login(char* primit,char *raspuns, int logat, char* username);
 void get_user_and_pass(char* msg_primit, char* username, char* pass);
 int functie_sign_in(char* msg_primit, char* raspuns, int logat, char* username);
-void functie_help(char* raspuns);
+void functie_help_login(char* raspuns);
 void functie_help_main(char* raspuns);
 
 
@@ -55,28 +55,22 @@ void sigchld_handler(int s)
 
 static int callback_insert(void *data, int argc, char **argv, char **azColName) {
    int i;
-   fprintf(stderr, "%s: ", (const char*)data);
-   char *rasp = (char*) data;
+   char *ans = (char*) data;
    for(i = 0; i<argc; i++) {
-      sprintf(rasp,"%s = %s\n", azColName[i], argv[i] ? argv[i] : "NULL");
+      sprintf(ans,"%s = %s\n", azColName[i], argv[i] ? argv[i] : "NULL");
    }
-   strcat(rasp,"\n");
    return 0;
 }
 
 static int callback(void *data, int argc, char **argv, char **azColName)
 {
    int i;
-   fprintf(stderr, "%s: ", (const char*)data);
-   char *rasp = (char*)data;
+   char *ans = (char*)data;
    for(i = 0; i<argc; i++)
    {
-      strcat(rasp, azColName[i]);
-      strcat(rasp, ":");
-      argv[i] ? strcat(rasp,argv[i]) : strcat(rasp,"NULL");
-      strcat(rasp, "\n");
+      sprintf(ans,"%s = %s\n", azColName[i], argv[i] ? argv[i] : "NULL");
    }
-   strcat(rasp, "\n");
+   strcat(ans, "\n");
    return 0;
 }
 
@@ -209,7 +203,7 @@ int main(int argc, char*argv[])
             int lungime_int = 0;
             int stop;
 
-            while(1)
+            while(cancel != 1)
             {
                 fflush(stdout);
                 fflush(stdin);
@@ -233,7 +227,7 @@ int main(int argc, char*argv[])
                 } 
                 if(stop == 0)
                     break;
-                //printf("Mesaj primit:%s,%d\n", msg_primit, strlen(msg_primit));
+                printf("Mesaj primit:%s,%d\n", msg_primit, strlen(msg_primit));
                 //trimitere mesaje:
 
                 char msg_de_trimis[MSGSIZE];
@@ -242,7 +236,7 @@ int main(int argc, char*argv[])
                 if(strstr(msg_primit, quit) != NULL)
                 {
                     cancel = 1;
-                    sprintf(msg_de_trimis, "Urmeaza sa va deconectati...");
+                    sprintf(msg_de_trimis, "QUI: Urmeaza sa va deconectati...");
                 }
                 else
                 {
@@ -388,7 +382,7 @@ int functie_sign_in(char* msg_primit, char *msg_de_trimis, int logat, char *user
     char pass[100];
     char sql[MSGSIZE];
     char data[MSGSIZE];
-    //data[0] = 0;
+    data[0] = 0;
     sql[0] = 0;
     char *zErrMsg = 0;
 
@@ -418,8 +412,10 @@ int functie_sign_in(char* msg_primit, char *msg_de_trimis, int logat, char *user
         else
         {
             memset(sql, 0, sizeof(sql));
+            sql[0] = 0;
             sprintf(sql, "INSERT INTO Clienti (Username, Password, Options) VALUES('%s','%s',0);",username, pass);
             memset(data, 0, sizeof(data));
+            data[0] = 0;
             rc = sqlite3_exec(db, sql, callback, data, &zErrMsg);
             if( rc != SQLITE_OK) 
             {
