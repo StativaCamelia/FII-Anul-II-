@@ -129,7 +129,7 @@ void *location_update(void* arg)
     char start_point[MSGSIZE];
     char stop_point[MSGSIZE];
     int begin = 0;
-    while(1)
+    while(cancel == 0)
     {   
         begin = logat;
         fflush(stdin);
@@ -150,7 +150,7 @@ void *speed_update(void *arg)
 {
     char viteza_str[MSGSIZE];
     int begin = 0;
-    while(1)
+    while(cancel == 0)
         {   
             begin = logat;
             fflush(stdin);
@@ -202,12 +202,14 @@ void *receive_function(void *arg)
         if(strstr(msg_primit, "LOK") != NULL)
         {
             logat = 1;
+            main_meniu();
         }
         else if(strstr(msg_primit, "IOK") != NULL)
         {
             logat = 1;
+            main_meniu();
         }
-        else if(strstr(msg_primit, "QUI"))
+        else if(strstr(msg_primit, "QUI") != NULL)
         {
             cancel = 1;
             close(sock_d);
@@ -271,7 +273,7 @@ void *commands_send(void *arg)
         else if(strstr(commanda, "Quit") != NULL)
         {
             cancel = 1;
-
+            send_function(commanda);
         }
         else{
 
