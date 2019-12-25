@@ -9,19 +9,22 @@
 #include <stdlib.h>
 #include <sys/wait.h>
 #include "sqlite3.h"
+#include <sys/syscall.h>
 
 #define PORT 2019 //PORTUL FOLOSIT
 #define MSGSIZE 500
 #define MAXCLIENTS 100
+
+pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+
+
 //baza de date
 sqlite3* db;
 
 //structura folosita de clienti
 static int uid = 10;
-
-pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
-int logat;
-int cancel;
+int logat = 0;
+int cancel = 0;
 
 typedef struct
 {
@@ -47,6 +50,7 @@ int functie_login(char* primit,char *raspuns, int logat, char* username);
 void get_user_and_pass(char* msg_primit, char* username, char* pass);
 int functie_sign_in(char* msg_primit, char* raspuns, int logat, char* username);
 void functie_help_login(char* raspuns);
+void functie_update_settings(char * msg_primit,char* raspuns, char* username);
 void functie_help_main(char* raspuns);
 
 
@@ -61,26 +65,22 @@ void sigchld_handler(int s)
     errno = saved_errno;
 }
 
-static int callback_insert(void *data, int argc, char **argv, char **azColName) {
+static int callback(void *data, int argc, char **argv, char **azColName)
+
+{
    int i;
-   char *ans = (char*) data;
-   for(i = 0; i<argc; i++) {
-      sprintf(ans,"%s = %s\n", azColName[i], argv[i] ? argv[i] : "NULL");
+   char *rasp = (char*)data;
+   for(i = 0; i<argc; i++)
+   {
+      strcat(rasp, azColName[i]);
+      strcat(rasp, ":");
+      argv[i] ? strcat(rasp,argv[i]) : strcat(rasp,"NULL");
+      strcat(rasp, "\n");
    }
+   strcat(rasp, "\n");
    return 0;
 }
 
-static int callback(void *data, int argc, char **argv, char **azColName)
-{
-   int i;
-   char *ans = (char*)data;
-   for(i = 0; i<argc; i++)
-   {
-      sprintf(ans,"%s = %s\n", azColName[i], argv[i] ? argv[i] : "NULL");
-   }
-   strcat(ans, "\n");
-   return 0;
-}
 
 //Ce comenzi poate sa primeasca serverul:
     char login[] = "Login";
@@ -165,6 +165,7 @@ int main(int argc, char*argv[])
     while(1)
     {
         fflush(stdout);
+
         //acceptam un client
         int lenght = sizeof(from);
         sock_client = accept(sock_serv, (struct sockaddr *)&from, &lenght);
@@ -199,25 +200,26 @@ int main(int argc, char*argv[])
                 fflush(stdin);
 
                 close(sock_serv);
-                logat = 0;
+                int logat = 0;
                 char locatie[3];
                 char viteza[3];
-                cancel = 0;
+                int cancel = 0;
+
                 
                 bzero(&locatie,sizeof(locatie));
                 bzero(&viteza, sizeof(viteza));
 
                 pthread_t recv_thread, news_thread;
-                
+
                 if(pthread_mutex_init(&lock, NULL))
                 {
                     printf("Initializarea mutex nu a reusit");
                 }
-
-                pthread_create(&recv_thread, NULL, &recv_msg, NULL);
-                pthread_join(&recv_thread, NULL);
+                int thread1;
+                thread1 = pthread_create(&recv_thread, NULL, &recv_msg, (void*)sock_client);
+                pthread_exit(NULL);
                 pthread_mutex_destroy(&lock);          
-        
+
                 exit(1);
         }//end if fork
         close(sock_client);
@@ -228,6 +230,7 @@ int main(int argc, char*argv[])
 
 void send_function(char *msg_de_trimis)
 {
+    
     int lungime_int;
     char lungime_str[3];
     pthread_mutex_lock(&lock);
@@ -250,12 +253,12 @@ void send_function(char *msg_de_trimis)
     pthread_mutex_unlock(&lock);
 }
 
-void *recv_msg(void *arg)
+void *recv_msg(void *sock)
 {
+        int sock_d = (int)sock;
         char lungime_str[3];
         int lungime_int = 0;
         int stop;
-        cancel = 0;
 
         while(cancel == 0)
         {
@@ -263,7 +266,7 @@ void *recv_msg(void *arg)
             fflush(stdin);
             bzero(lungime_str, sizeof(lungime_str));
             
-            if((stop=read(uid-1, lungime_str, sizeof(lungime_str)))<0)
+            if((stop=read(sock_d, lungime_str, sizeof(lungime_str)))<0)
             {
                 perror("[server] Eroare la citirea lungimii in server");
                 return errno;
@@ -277,7 +280,7 @@ void *recv_msg(void *arg)
             char *msg_primit = (char*)malloc(lungime_int);
             memset(msg_primit, 0, sizeof(msg_primit));
             
-            if(read(uid-1, msg_primit, lungime_int+1)<0)
+            if(read(sock_d, msg_primit, lungime_int+1)<0)
             {
                 perror("[server] Eroare la citirea mesajului in server");
                 return errno;
@@ -286,7 +289,7 @@ void *recv_msg(void *arg)
             if(stop == 0)
                 break;
             
-            printf("Mesaj pprimit:%s,%d\n", msg_primit, strlen(msg_primit));
+            //printf("Mesaj pprimit:%s,%d\n", msg_primit, strlen(msg_primit));
             //trimitere mesaje:
             char msg_de_trimis[MSGSIZE];
             char username[100];
@@ -334,6 +337,7 @@ void *recv_msg(void *arg)
         }
     }
 
+
 void send_message_to_all(char* message)
 {   
     char *send = (char*) malloc((strlen(message)+5)*sizeof(char));
@@ -373,6 +377,11 @@ int pregatire_raspuns(char *msg_primit, char *msg_de_trimis, int logat, char* us
         logat = logat;
         functie_help_main(msg_de_trimis);
     }
+    else if(strstr(msg_primit, update_settings) != NULL && logat == 1)
+    {
+        logat = logat;
+        functie_update_settings(msg_primit, msg_de_trimis, username);
+    }
     else 
     {   
         sprintf(msg_de_trimis, "ERR: Comanda introdusa nu exista");
@@ -382,15 +391,56 @@ int pregatire_raspuns(char *msg_primit, char *msg_de_trimis, int logat, char* us
 }
 
 
+void functie_update_settings(char* msg_primit, char* msg_de_trimis, char* username)
+{
+    char *option = msg_primit + strlen(update_settings);
+    int option_int;
+    if(strstr(option, "Yes") != NULL)
+    {
+        option_int = 1;
+    }
+    else if(strstr(option, "No") != NULL)
+    {
+        option_int = 0;
+    }
+    char data[MSGSIZE];
+    char sql[MSGSIZE];
+    data[0] = 0;
+    sql[0] = 0;
+    char *zErrMsg = 0;
+    
+    int rc;
+    memset(sql, 0, sizeof(sql));
+    
+    sprintf(sql,"UPDATE Clienti SET Options = %d Where Username = '%s';", option_int, username);
+    
+    memset(msg_de_trimis, 0,sizeof(msg_de_trimis));
+    memset(data, 0, sizeof(data));
+    
+    rc = sqlite3_exec(db, sql, callback, data, &zErrMsg);
+    if( rc != SQLITE_OK) 
+    {
+        printf("SQL error: %s\n", zErrMsg);
+        sqlite3_free(zErrMsg);
+    }
+    else 
+    {
+        sprintf(msg_de_trimis, "UOK: Update-ul Setarilor s-a facut cu succes");
+    }
+}
+
+
 void functie_help_login(char* msg_de_trimis)
 {
+    strcat(msg_de_trimis, "HLP:");
     strcat(msg_de_trimis, "Pentru Login introduce comanda <Login>, ulterior vi se vor solicita username-ul si parola, asociate contului\n");
     strcat(msg_de_trimis, "Pentru sign_in ntorduceti comanda <Sign_in>, ulteror vi se vor solicita username-ul si parola noului cont\n");
     strcat(msg_de_trimis, "Pentru a parasi aplicatie introduceti comanda <Quit>");
 }
 
+
 void functie_help_main(char* msg_de_trimis)
-{
+{   strcat(msg_de_trimis, "HLP:");
     strcat(msg_de_trimis, "Aplicatie este destinata monitorizarii traficului, drept urmare pozitia respectiv viteza dumneaavoastra sunt utilizate in acest scop\n");
     strcat(msg_de_trimis, "In acest fel urmeaza a fi instintati cu privire la evenimentele petrecute in trafic si respectiv cu privire la restrictiile de viteza\n");
     strcat(msg_de_trimis, "Daca doriti raportarea unui eveniment introduceti comanda <Trafic Info>, urmata de mesajul dumneavoastra");
@@ -411,6 +461,7 @@ void get_user_and_pass(char* msg_primit, char *username, char *pass)
     ptr = strtok(NULL, "\n");
     sprintf(pass,"%s", ptr);
 }
+
 
 int functie_sign_in(char* msg_primit, char *msg_de_trimis, int logat, char *username)
 {
@@ -481,7 +532,7 @@ int functie_login(char *msg_primit, char *msg_de_trimis, int logat, char*usernam
     char *zErrMsg = 0;
     if(logat == 1)
     {
-        sprintf(msg_de_trimis, "Utilizatorul %s este deja logat\n", username);
+        sprintf(msg_de_trimis, "LNU:Utilizatorul %s este deja logat\n", username);
         logat = logat;
     }
     else
@@ -492,6 +543,7 @@ int functie_login(char *msg_primit, char *msg_de_trimis, int logat, char*usernam
         memset(msg_de_trimis, 0 , sizeof(msg_de_trimis));
         memset(data, 0, sizeof(data));
         rc = sqlite3_exec(db, sql, callback, data, &zErrMsg);
+        printf("%s",data);
         if( rc != SQLITE_OK) 
         {
             printf("SQL error: %s\n", zErrMsg);
