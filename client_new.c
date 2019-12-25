@@ -199,7 +199,6 @@ void *receive_function(void *arg)
             perror("[client] Eroare la citirea mesajului in server");
             return errno;
         } 
-
         if(strstr(msg_primit, "LOK") != NULL)
         {
             logat = 1;
@@ -214,6 +213,10 @@ void *receive_function(void *arg)
         {
             cancel = 1;
             close(sock_d);
+        }
+        else if(strstr(msg_primit, "NEW") != NULL)
+        {
+            printf("NEWS------------------------------->\n");
         }
         if(stop == 0)
             break;
