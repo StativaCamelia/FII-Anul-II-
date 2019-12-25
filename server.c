@@ -9,7 +9,7 @@
 #include <stdlib.h>
 #include <sys/wait.h>
 #include "sqlite3.h"
-#include <sys/syscall.h>
+#include <libxml/parser.h>
 
 #define PORT 2019 //PORTUL FOLOSIT
 #define MSGSIZE 500
@@ -25,6 +25,7 @@ sqlite3* db;
 static int uid = 10;
 int logat = 0;
 int cancel = 0;
+int news_option = 0; 
 
 typedef struct
 {
@@ -41,7 +42,7 @@ void add_client(client_info * cl);
 void delete_client(int sock_id);
 void send_message_to_all(char* message);
 
-void *send_news(char *msg_trimis);
+void *send_news(void *arg);
 void *recv_msg(void *argc);
 void send_function(char *msg_de_trimis);
 
@@ -200,24 +201,26 @@ int main(int argc, char*argv[])
                 fflush(stdin);
 
                 close(sock_serv);
-                int logat = 0;
+                logat = 0;
                 char locatie[3];
                 char viteza[3];
-                int cancel = 0;
+                cancel = 0;
 
                 
                 bzero(&locatie,sizeof(locatie));
                 bzero(&viteza, sizeof(viteza));
 
-                pthread_t recv_thread, news_thread;
+                pthread_t recv_thread, send_thread;
 
                 if(pthread_mutex_init(&lock, NULL))
                 {
                     printf("Initializarea mutex nu a reusit");
                 }
-                int thread1;
-                thread1 = pthread_create(&recv_thread, NULL, &recv_msg, (void*)sock_client);
-                pthread_exit(NULL);
+                
+                pthread_create(&recv_thread, NULL, &recv_msg, (void*)sock_client);
+                pthread_create(&send_thread, NULL, &send_news, (void*)sock_client);
+                pthread_join(send_thread, NULL);
+                pthread_join(recv_thread, NULL);
                 pthread_mutex_destroy(&lock);          
 
                 exit(1);
@@ -227,7 +230,73 @@ int main(int argc, char*argv[])
     }
     sqlite3_close(db);
 }
+void generate_random(char *compare)
+{
+    srand(time(NULL));
+    int rand_num;
+    rand_num = rand()%4 + 1;
+    if(rand_num == 1)
+        strcpy(compare,"n1");
+    else if(rand_num == 2)
+        strcpy(compare, "n2");
+    else if(rand_num == 3)
+        strcpy(compare, "n3");
+    else strcpy(compare, "n4");
+}
 
+void get_news(char *news)
+{
+    strcat(news,"NEW:");
+
+    char compare[MSGSIZE];
+    memset(compare, 0, sizeof(compare));
+    generate_random(compare);
+
+    xmlDoc *document;
+    xmlNode *root, *node, *first_child, *first_inner_child, *inner_node;
+
+    char *filename = "news.xml";
+    document = xmlReadFile(filename, NULL, 0);
+    root = xmlDocGetRootElement(document);
+    first_child = root->children;
+    for (node = first_child; node; node = node->next)
+        {
+            if(strstr(node->name,compare) != NULL)
+            {
+                first_inner_child = node ->children;
+                for(inner_node = first_inner_child; inner_node; inner_node = inner_node -> next)
+                    {
+                        if(strstr(inner_node->name,"text"))
+                            continue;
+                        strcat(news, inner_node->name);
+                        strcat(news, ":");
+                        strcat(news, xmlNodeGetContent(inner_node));
+                        strcat(news, "\n");
+                    }
+                break;   
+            }
+        }
+        news[strlen(news)] = '\0';
+}
+
+void *send_news(void* sock)
+{
+    int sock_d = (int)sock;
+    char news[MSGSIZE];
+    
+    while(cancel == 0)
+    {   memset(news, 0, sizeof(news));
+        fflush(stdin);
+        fflush(stdout);
+
+        if(news_option == 1)
+        {
+            get_news(news);
+            send_function(news);
+            sleep(360);
+        }
+    }
+}
 void send_function(char *msg_de_trimis)
 {
     
@@ -252,6 +321,7 @@ void send_function(char *msg_de_trimis)
     
     pthread_mutex_unlock(&lock);
 }
+
 
 void *recv_msg(void *sock)
 {
@@ -289,7 +359,7 @@ void *recv_msg(void *sock)
             if(stop == 0)
                 break;
             
-            //printf("Mesaj pprimit:%s,%d\n", msg_primit, strlen(msg_primit));
+            printf("Mesaj pprimit:%s,%d\n", msg_primit, strlen(msg_primit));
             //trimitere mesaje:
             char msg_de_trimis[MSGSIZE];
             char username[100];
@@ -309,8 +379,10 @@ void *recv_msg(void *sock)
             send_function(msg_de_trimis);
         } 
 }
-    //adaug un client la lista actuala de clienti conectati la server
-    void add_client(client_info * cl)
+
+
+//adaug un client la lista actuala de clienti conectati la server
+void add_client(client_info * cl)
     {   
         for(int i = 0; i< MAXCLIENTS; ++i)
         {   
@@ -321,8 +393,10 @@ void *recv_msg(void *sock)
             }
         }
     }
-    //elimin un client din lista actuala de clienti conectati la server
-    void delete_client(int sock_id)
+
+
+//elimin un client din lista actuala de clienti conectati la server
+void delete_client(int sock_id)
     {
         for(int i=0; i < MAXCLIENTS; i++)
         {
@@ -356,6 +430,7 @@ void send_message_to_all(char* message)
         }    
     }
 }
+
 
 int pregatire_raspuns(char *msg_primit, char *msg_de_trimis, int logat, char* username)
 {
@@ -427,6 +502,9 @@ void functie_update_settings(char* msg_primit, char* msg_de_trimis, char* userna
     {
         sprintf(msg_de_trimis, "UOK: Update-ul Setarilor s-a facut cu succes");
     }
+
+    if(option_int == 1);
+        news_option = 1;
 }
 
 
@@ -474,7 +552,7 @@ int functie_sign_in(char* msg_primit, char *msg_de_trimis, int logat, char *user
 
     if(logat == 1)
     {
-        sprintf(msg_de_trimis, "INU:Utilizatorul %s este deja logat", username);
+        sprintf(msg_de_trimis, "INU:Utilizatorul %s este deja logat\n", username);
         logat = logat;
     }
     else
@@ -543,7 +621,6 @@ int functie_login(char *msg_primit, char *msg_de_trimis, int logat, char*usernam
         memset(msg_de_trimis, 0 , sizeof(msg_de_trimis));
         memset(data, 0, sizeof(data));
         rc = sqlite3_exec(db, sql, callback, data, &zErrMsg);
-        printf("%s",data);
         if( rc != SQLITE_OK) 
         {
             printf("SQL error: %s\n", zErrMsg);
@@ -558,6 +635,10 @@ int functie_login(char *msg_primit, char *msg_de_trimis, int logat, char*usernam
         {
             sprintf(msg_de_trimis, "LNU:Username-ul %s nu exista\n", username);
             logat = 0;
+        }
+        if(strstr(data, "Options:1") != NULL)
+        {
+            news_option = 1;
         }
     }
     return logat;
