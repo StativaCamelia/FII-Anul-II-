@@ -199,6 +199,7 @@ void *receive_function(void *arg)
             perror("[client] Eroare la citirea mesajului in server");
             return errno;
         } 
+        
         if(strstr(msg_primit, "LOK") != NULL)
         {
             logat = 1;
@@ -220,6 +221,7 @@ void *receive_function(void *arg)
         }
         if(stop == 0)
             break;
+
         printf("%s\n",msg_primit+4);
     }
 }
@@ -300,14 +302,14 @@ void *commands_send(void *arg)
 
             send_function(commanda);
         }
-        else if(strstr(commanda, "Trafic info") != NULL)
+        else if(strstr(commanda, "Trafic info") != NULL && logat == 1)
         {
-            printf("Introduceti un incident din trafic, specifincand strada pe care are acesta loc");
+            printf("Introduceti un incident din trafic, specifincand strada pe care are acesta loc\n");
             fgets(incident, sizeof(option), stdin);
             strcat(commanda, incident);
+            commanda[strlen(commanda)] = '\0';
             send_function(commanda);
         }
-        
         else if(strstr(commanda, "Quit") != NULL)
         {
             cancel = 1;
