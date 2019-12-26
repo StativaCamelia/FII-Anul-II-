@@ -23,37 +23,36 @@ sqlite3* db;
 
 //structura folosita de clienti
 static int uid = 10;
+//client info
 int logat = 0;
 int cancel = 0;
 int news_option = 0; 
 
-typedef struct
-{
-int sock_id;
-char ip[INET_ADDRSTRLEN];
-int UID;
-} client_info;
-
-//lista de clienti
-client_info *clients[MAXCLIENTS];
-
-//functii:
-void add_client(client_info * cl);
-void delete_client(int sock_id);
-void send_message_to_all(char* message);
-
-void *send_news(void *arg);
-void *recv_msg(void *argc);
+//prototip functie listener:
+void *recv_msg(void *arg);
+//prototip send
 void send_function(char *msg_de_trimis);
 
-int pregatire_raspuns(char *primit, char *raspuns, int logat, char* username);
-int functie_login(char* primit,char *raspuns, int logat, char* username);
-void get_user_and_pass(char* msg_primit, char* username, char* pass);
-int functie_sign_in(char* msg_primit, char* raspuns, int logat, char* username);
-void functie_help_login(char* raspuns);
-void functie_update_settings(char * msg_primit,char* raspuns, char* username);
-void functie_help_main(char* raspuns);
+//prototip functii incidente:
+void add_event(char* mesaj);
+void *send_incidents_function(void *arg);
 
+//prototip functii news:
+void get_news(char *mesaj);
+void *send_news(void *arg);
+
+//functii comenzi:
+void functie_help_main(char* raspuns);
+void functie_help_login(char* raspuns);
+int functie_login(char* primit,char *raspuns, int logat, char* username);
+int functie_sign_in(char* msg_primit, char* raspuns, int logat, char* username);
+void functie_update_settings(char * msg_primit,char* raspuns, char* username);
+
+//aditional
+int pregatire_raspuns(char *primit, char *raspuns, int logat, char* username);
+void get_user_and_pass(char* msg_primit, char* username, char* pass);
+void sigchld_handler(int s);
+static int callback(void *data, int argc, char **argv, char **azColName);
 
 extern int errno;
 
@@ -67,7 +66,6 @@ void sigchld_handler(int s)
 }
 
 static int callback(void *data, int argc, char **argv, char **azColName)
-
 {
    int i;
    char *rasp = (char*)data;
@@ -82,16 +80,15 @@ static int callback(void *data, int argc, char **argv, char **azColName)
    return 0;
 }
 
-
 //Ce comenzi poate sa primeasca serverul:
-    char login[] = "Login";
-    char sign_in[] = "Sign in";
-    char traffic_info[] = "Trafic info";
-    char update_settings[] = "Update Settings";
-    char update_location[] = "Update Location";
-    char update_speed[] = "Update Speed"; 
-    char quit[] = "Quit";
-    char help[] = "Help";
+char login[] = "Login";
+char sign_in[] = "Sign in";
+char traffic_info[] = "Trafic info";
+char update_settings[] = "Update Settings";
+char update_location[] = "Update Location";
+char update_speed[] = "Update Speed"; 
+char quit[] = "Quit";
+char help[] = "Help";
 
 
 int main(int argc, char*argv[])
@@ -102,6 +99,7 @@ int main(int argc, char*argv[])
         fprintf(stderr, "Baza de date nu poate fi deschisa: %s\n", sqlite3_errmsg (db));
         return 0;
     }
+
     //structura folosita de server
     struct sockaddr_in server;
 
@@ -116,12 +114,14 @@ int main(int argc, char*argv[])
 
     //creare socket
     if((sock_serv = socket(AF_INET, SOCK_STREAM, 0)) == -1)
-        {
-            perror("[server] Eroare la creare socket\n");
-            return errno;
-        }
+    {
+        perror("[server] Eroare la creare socket\n");
+        return errno;
+    }
+    
     int on=1;
     setsockopt(sock_serv,SOL_SOCKET,SO_REUSEADDR,&on,sizeof(on));
+    
     //pregatire structuri date
     bzero(&server, sizeof(server));
     bzero(&from, sizeof(from));
@@ -158,10 +158,6 @@ int main(int argc, char*argv[])
     }
 
     printf("[server] Astept clientii la portul: %d\n",PORT);
-   
-    //ip-ul clientilor
-    char ip[INET_ADDRSTRLEN];
-   
     //incepem sa servim in mod concurent clientii
     while(1)
     {
@@ -175,52 +171,31 @@ int main(int argc, char*argv[])
             perror("[server] Eroare la accept\n");
             continue;
         }
-        //adaugam clientul la lista actuala de clienti
-        client_info *cl = (client_info*)malloc(sizeof(client_info));
-   
-        //client uid and socket
         dup2(sock_client,uid);
-        cl->sock_id = uid;
-        cl->UID = uid;
         uid++;
-        //convertim addresa clientului intr-un string
-        inet_ntop(AF_INET, (struct sockaddt*)&from, ip, INET_ADDRSTRLEN);
-        //adaugam ip-ul clientului
-        strcpy(cl->ip,ip);
-        
-        //adaugam socketul clientului
-        cl->sock_id = sock_client;
-        add_client(cl);
-
-        //handler pentru client
         int pid = fork();
-        
         if(pid == 0)
         {   
                 fflush(stdout);
                 fflush(stdin);
 
                 close(sock_serv);
-                logat = 0;
-                char locatie[3];
-                char viteza[3];
-                cancel = 0;
-
-                
-                bzero(&locatie,sizeof(locatie));
-                bzero(&viteza, sizeof(viteza));
-
-                pthread_t recv_thread, send_thread;
+                int sock = uid-1;
+                pthread_t recv_thread, send_thread, send_incidents;
 
                 if(pthread_mutex_init(&lock, NULL))
                 {
                     printf("Initializarea mutex nu a reusit");
                 }
                 
-                pthread_create(&recv_thread, NULL, &recv_msg, (void*)sock_client);
-                pthread_create(&send_thread, NULL, &send_news, (void*)sock_client);
+                pthread_create(&recv_thread, NULL, &recv_msg, (void*)sock);
+                pthread_create(&send_thread, NULL, &send_news, (void*)sock);
+                pthread_create(&send_incidents, NULL, &send_incidents_function, (void*)sock);
+                
+                pthread_join(send_incidents, NULL);
                 pthread_join(send_thread, NULL);
                 pthread_join(recv_thread, NULL);
+                
                 pthread_mutex_destroy(&lock);          
 
                 exit(1);
@@ -230,6 +205,59 @@ int main(int argc, char*argv[])
     }
     sqlite3_close(db);
 }
+
+
+void get_incidents(char* incidents, int last_check)
+{
+    char sql[MSGSIZE];
+    char data[100];
+    char *zErrMsg = 0;
+    int rc;
+    
+    printf("%d\n", last_check);
+    memset(data, 0, sizeof(data));
+    
+    sprintf(sql, "SELECT Incident FROM Incidente WHERE Timestamp > %d", last_check);
+    rc = sqlite3_exec(db, sql, callback, data, &zErrMsg);
+
+    if( rc != SQLITE_OK)
+    {
+        printf("SQL error: %s\n", zErrMsg);
+        sqlite3_free(zErrMsg);
+    }
+    else 
+    { 
+        strcat(incidents, "TRF:");
+        strcat(incidents, data);
+    }
+}
+
+void *send_incidents_function(void *sock)
+{
+    int sock_d = (int)sock;
+    char incidents[MSGSIZE];
+    int current_time = time(NULL);
+    int last_check = time(NULL);
+
+    while(cancel == 0)
+    {
+        memset(incidents, 0, sizeof(incidents));
+        fflush(stdin);
+        fflush(stdout);
+        
+        if(logat == 1)
+        {   
+           get_incidents(incidents, last_check);
+            if(strlen(incidents) > 4)
+                send_function(incidents);
+            last_check = current_time+5;
+        }
+        current_time = time(NULL);
+        sleep(5);
+    }
+}
+
+
 void generate_random(char *compare)
 {
     srand(time(NULL));
@@ -243,6 +271,7 @@ void generate_random(char *compare)
         strcpy(compare, "n3");
     else strcpy(compare, "n4");
 }
+
 
 void get_news(char *news)
 {
@@ -279,6 +308,7 @@ void get_news(char *news)
         news[strlen(news)] = '\0';
 }
 
+
 void *send_news(void* sock)
 {
     int sock_d = (int)sock;
@@ -297,6 +327,8 @@ void *send_news(void* sock)
         }
     }
 }
+
+
 void send_function(char *msg_de_trimis)
 {
     
@@ -359,7 +391,7 @@ void *recv_msg(void *sock)
             if(stop == 0)
                 break;
             
-            printf("Mesaj pprimit:%s,%d\n", msg_primit, strlen(msg_primit));
+            //printf("Mesaj pprimit:%s,%d\n", msg_primit, strlen(msg_primit));
             //trimitere mesaje:
             char msg_de_trimis[MSGSIZE];
             char username[100];
@@ -375,60 +407,9 @@ void *recv_msg(void *sock)
                 logat = pregatire_raspuns(msg_primit, msg_de_trimis, logat, username);
             }
             msg_de_trimis[strlen(msg_de_trimis)] = '\0';
-            
-            send_function(msg_de_trimis);
+            if(strstr(msg_primit, traffic_info) == NULL || logat == 0)
+                send_function(msg_de_trimis);
         } 
-}
-
-
-//adaug un client la lista actuala de clienti conectati la server
-void add_client(client_info * cl)
-    {   
-        for(int i = 0; i< MAXCLIENTS; ++i)
-        {   
-            if(!clients[i])
-            {  
-                clients[i] = cl;
-                break;
-            }
-        }
-    }
-
-
-//elimin un client din lista actuala de clienti conectati la server
-void delete_client(int sock_id)
-    {
-        for(int i=0; i < MAXCLIENTS; i++)
-        {
-            if(clients[i])
-            {
-                if(clients[i]->sock_id == sock_id)
-                {
-                    clients[i] = NULL;
-                    break;
-                }
-            }
-        }
-    }
-
-
-void send_message_to_all(char* message)
-{   
-    char *send = (char*) malloc((strlen(message)+5)*sizeof(char));
-    strcpy(send,"INFO:");
-    strcat(send,message);
-    for(int i=0; i<MAXCLIENTS;i++)
-    {   
-        if(clients[i])
-        {   
-            if(write(clients[i]->UID, send, strlen(send)) < 0)
-            {
-                perror("[server] Eroare la scriere in send_to_all");
-                break;
-            }
-        
-        }    
-    }
 }
 
 
@@ -457,12 +438,38 @@ int pregatire_raspuns(char *msg_primit, char *msg_de_trimis, int logat, char* us
         logat = logat;
         functie_update_settings(msg_primit, msg_de_trimis, username);
     }
+    else if(strstr(msg_primit, traffic_info) != NULL && logat == 1)
+    {
+        logat = logat;
+        add_event(msg_primit);
+    }
     else 
     {   
         sprintf(msg_de_trimis, "ERR: Comanda introdusa nu exista");
         logat = logat;
     }
     return logat;
+}
+
+
+void add_event(char* msg_primit)
+{
+    char sql[MSGSIZE];
+    char data[MSGSIZE];
+    data[0] = 0;
+    sql[0] = 0;
+    char *zErrMsg = 0;
+    int rc;
+    memset(data, 0, sizeof(data));
+    int timestamp = time(NULL);
+ 
+    sprintf(sql, "INSERT INTO Incidente (Incident, Timestamp) VALUES ('%s', %d);", msg_primit+11, timestamp);
+    rc = sqlite3_exec(db, sql, callback, data, &zErrMsg);
+    if( rc != SQLITE_OK) 
+    {
+            printf("SQL error: %s\n", zErrMsg);
+            sqlite3_free(zErrMsg);
+    }
 }
 
 
