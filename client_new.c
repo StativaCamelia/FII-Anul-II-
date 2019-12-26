@@ -1,5 +1,6 @@
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <termios.h>
 #include <netinet/in.h>
 #include <errno.h>
 #include <unistd.h>
@@ -46,6 +47,18 @@ char msg_trimis[MSGSIZE];
 
 //sock
 int sock_d;
+
+int getch() {
+    struct termios oldt, newt;
+    int ch;
+    tcgetattr(STDIN_FILENO, &oldt);
+    newt = oldt;
+    newt.c_lflag &= ~(ICANON | ECHO);
+    tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+    ch = getchar();
+    tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+    return ch;
+}
 
 int main(int argc, char* argv[])
 {       
@@ -256,7 +269,16 @@ void *commands_send(void *arg)
             fflush(stdin);
             fflush(stdout);
             printf("Introduceti parola utilizatorului:");
-            fgets(password, sizeof(password), stdin);
+            
+            int p=0; 
+            char pass[1];
+            do{ 
+                password[p]=getch();
+                if(password[p]!='\n'){ 
+                printf("*"); 
+            } 
+            p++; 
+            }while(password[p-1]!='\n');
 
             strcat(commanda, username);
             strcat(commanda, password);
@@ -277,7 +299,14 @@ void *commands_send(void *arg)
             fflush(stdin);
             fflush(stdout);
             printf("Introduceti parola noului cont:");
-            fgets(password, sizeof(password), stdin);
+            int p1=0; 
+            do{ 
+                password[p1]=getch();
+                if(password[p1]!='\n'){ 
+                printf("*"); 
+            } 
+            p1++; 
+            }while(password[p1-1]!='\n');
 
             strcat(commanda, username);
             strcat(commanda, password);
