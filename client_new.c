@@ -21,10 +21,10 @@ extern int errno;
 int port;
 
 //variabila care anunta inchiderea
-int cancel = 0;
+volatile int cancel = 0;
 volatile int logat = 0;
-int locatie_ok = 0;
-char locatii_posibile[10][MSGSIZE] = {"Cuza Voda", "Alexandru Ioan Cuza", "Garii", "Moara de Foc", "Decebal", "7 Noiembrie", "Bucsinescu", "Aleea Basarabi", "Lapusneanu"};
+volatile int locatie_ok = 0;
+char locatii_posibile[10][MSGSIZE] = {"Cuza Voda", "Alexandru Ioan Cuza", "Garii", "Moara de Foc", "Traian", "7 Noiembrie", "Bucsinescu", "Aleea Basarabi", "Lapusneanu"};
 
 //FUCTII
 void print_meniu();
@@ -422,5 +422,4 @@ void main_meniu()
     printf("Abonare la news(Update Settings)\n");
     printf("Quit\n");
     printf("----------------------------------------------->\n");
-
 }
