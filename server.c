@@ -15,7 +15,11 @@
 #define PORT 2019 //PORTUL FOLOSIT
 #define MSGSIZE 500
 #define MAXCLIENTS 100
-
+#define INCIDENTS_POINTS 7
+#define NORMAL_TRAFIC 10
+#define INCIDENT_SPEED_LIMIT 20
+#define INFINIT 10000000
+#define NODES 11
 pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 
 
@@ -24,13 +28,18 @@ sqlite3* db;
 
 //structura folosita de clienti
 static int uid = 10;
-//client info
-int logat = 0;
-int cancel = 0;
-int news_option = 0;
+//client info0.
+volatile int logat = 0;
+volatile int cancel = 0;
+volatile int news_option = 0;
 char viteza[50] = {0};
+volatile int viteza_int = 0;
 char locatie_start[50] = {0};
+char locatie_curenta[50] = {0};
 char locatie_stop[50] = {0};
+int Graph[NODES][NODES];
+int path[NODES];
+int start_route = -1;
 //prototip functie listener:
 
 void *recv_msg(void *arg);
@@ -58,11 +67,15 @@ int functie_delogare(char *raspuns, char* username);
 int check_speed_limit(char viteza[]);
 void speed_advertisment(const char *primit,char* raspuns);
 void send_speed_limit(char *raspuns);
-void update_speedlimit(const char* primit);
-void get_normal_speed();
+void update_speedlimit_incident(const char* primit);
+void update_speedlimit_aglomeration(int nodeID);
+int check_cars_no(int nodeID);
+void set_normal_speed();
+void add_some_cars();
 
 //pozitie
 void initializare_pozitie(const char *primit, char* raspuns);
+void *parcurgere_traseu(void *arg);
 
 //aditional
 int pregatire_raspuns(const char *primit, char *raspuns, int logat, char* username);
@@ -73,8 +86,19 @@ static int callback(void *data, int argc, char **argv, char **azColName);
 void hash_password(char *pass);
 char *get_streets(const char *primit);
 char *street_name(char* data, const char* primit);
-void update_noPeople(int nodeID);
+void update_cars_no(int nodeID, int increase);
+void add_cars_no();
+
 int get_nodeID(char *streetName);
+int get_path_cost(int from_NodeID, int to_NodeID);
+int get_distance(int from_nodeID, int to_nodeId);
+int get_incidents_points(int to_nodeID);
+int get_number_of_cars_points(int to_nodeID);
+int get_minim_cars();
+int check_no_cars();
+int dijkstra(int Graph[][NODES], int location, int target, int path[NODES]);
+void get_name_from_nodeID(int nodeID, char* curretn_location);
+void initializare_matrice_costuri(int Grapth[][NODES]);
 extern int errno;
 
 void sigchld_handler(int s)
@@ -85,6 +109,7 @@ void sigchld_handler(int s)
 
     errno = saved_errno;
 }
+
 
 static int callback(void *data, int argc, char **argv, char **azColName)
 {
@@ -101,6 +126,7 @@ static int callback(void *data, int argc, char **argv, char **azColName)
    return 0;
 }
 
+
 static int callback_without_name(void *data, int argc, char **argv, char **azColName)
 {
    int i;
@@ -112,6 +138,7 @@ static int callback_without_name(void *data, int argc, char **argv, char **azCol
    }
    return 0;
 }
+
 
 //Ce comenzi poate sa primeasca serverul:
 char login[] = "Login";
@@ -217,7 +244,7 @@ int main(int argc, char*argv[])
                 close(sock_serv);
 
                 int sock = uid-1;
-                pthread_t recv_thread, send_thread, send_incidents;
+                pthread_t recv_thread, send_thread, send_incidents, update_location;
 
                 if(pthread_mutex_init(&lock, NULL))
                 {
@@ -227,7 +254,8 @@ int main(int argc, char*argv[])
                 pthread_create(&recv_thread, NULL, &recv_msg, (void*)sock);
                 pthread_create(&send_thread, NULL, &send_news, (void*)sock);
                 pthread_create(&send_incidents, NULL, &send_incidents_function, (void*)sock);
-
+                pthread_create(&update_location, NULL, &parcurgere_traseu, (void*)sock);
+                pthread_join(update_location, NULL);
                 pthread_join(send_incidents, NULL);
                 pthread_join(send_thread, NULL);
                 pthread_join(recv_thread, NULL);
@@ -237,12 +265,90 @@ int main(int argc, char*argv[])
                     exit(1);
         
         }//end if fork
-        get_normal_speed();
-        
+
+        set_normal_speed();
+        add_some_cars();
+
         close(sock_client);
         close(uid-1);
     }
     sqlite3_close(db);
+}
+
+
+void get_name_from_nodeID(int nodeID, char *current_location)
+{
+    memset(current_location, 0, sizeof(current_location));
+    char sql[MSGSIZE];
+    char data[MSGSIZE];
+    data[0] = 0;
+    sql[0] = 0;
+    char *zErrMsg = 0;
+    int rc;
+
+    sprintf(sql, "SELECT StreetName FROM Streets WHERE NodeID = %d;", nodeID);
+    sql[strlen(sql)] = '\0';
+
+    memset(data, 0, sizeof(data));
+    rc = sqlite3_exec(db, sql, callback_without_name, data, &zErrMsg);
+    fflush(stdout);
+
+    if( rc != SQLITE_OK)
+    {
+            printf("SQL error: %s\n", zErrMsg);
+            sqlite3_free(zErrMsg);
+    }
+    data[strlen(data)-1] = '\0';   
+    strcpy(current_location, removeSpaces(data));
+}
+
+
+void *parcurgere_traseu(void *sock)
+{
+    int sock_d = (int)sock;
+    char msg_de_trimis[MSGSIZE];
+    int status_parcurs_total = 1;
+    float status_parcurs_per_strada = 0;
+    int distance; 
+
+    while(cancel == 0)
+    {
+        if(start_route >= 0 && logat == 1)
+        {
+            memset(locatie_curenta, 0, sizeof(locatie_curenta));
+            if(start_route == 0)
+            {   
+                memset(msg_de_trimis, 0, sizeof(msg_de_trimis));
+                sprintf(msg_de_trimis, "LOF:Ati ajuns la destinatie: %s", locatie_curenta);
+                send_function(msg_de_trimis);
+                break;
+            }
+            else
+            {   distance = get_distance(path[status_parcurs_total],path[status_parcurs_total+1]);
+                if(status_parcurs_per_strada >= distance)
+                {
+                    memset(msg_de_trimis, 0, sizeof(msg_de_trimis));
+                    status_parcurs_per_strada = 0;
+                    status_parcurs_total++;
+                    start_route--;
+                    
+                    get_name_from_nodeID(path[status_parcurs_total], locatie_curenta);
+                    update_cars_no(path[status_parcurs_total], 1);
+                    update_cars_no(path[status_parcurs_total-1], 0);
+                    
+                    send_speed_limit(msg_de_trimis);
+                    send_function(msg_de_trimis); 
+                }
+                else
+                {
+                    printf("%d, %f", viteza_int, status_parcurs_per_strada);
+                    status_parcurs_per_strada = status_parcurs_per_strada + viteza_int*0.06;
+                    sleep(60);
+                }
+            }
+            
+        }
+    }
 }
 
 
@@ -522,7 +628,7 @@ int pregatire_raspuns(const char *primit, char *msg_de_trimis, int logat, char* 
     {
         logat = logat;
         add_event(primit);
-        update_speedlimit(primit);
+        update_speedlimit_incident(primit);
     }
     else if(strstr(primit, update_speed)!= NULL && logat == 1)
     {
@@ -533,6 +639,8 @@ int pregatire_raspuns(const char *primit, char *msg_de_trimis, int logat, char* 
     {
         logat = logat;
         initializare_pozitie(primit, msg_de_trimis);
+        start_route = dijkstra(Graph,get_nodeID(locatie_start), get_nodeID(locatie_stop), path);
+        printf("Lungime%d",start_route);
     }
     else if(strstr(primit, delog) != NULL && logat == 1)
     {
@@ -555,8 +663,10 @@ void initializare_pozitie(const char *primit, char* msg_de_trimis)
     memset(locatie_start,0, sizeof(locatie_start));
     memset(locatie_stop, 0, sizeof(locatie_stop));
     get_lines(primit, locatie_start, locatie_stop);
-
-    update_noPeople(get_nodeID(locatie_start));
+    memset(locatie_curenta, 0, sizeof(locatie_curenta));
+    
+    strcpy(locatie_curenta, locatie_start);
+    update_cars_no(get_nodeID(locatie_start), 1);
     send_speed_limit(msg_de_trimis);
     send_function(msg_de_trimis);
 }
@@ -591,15 +701,15 @@ void send_speed_limit(char* msg_de_trimis)
     memset(sql, 0, sizeof(data));
     memset(msg_de_trimis, 0, sizeof(msg_de_trimis));
 
-    locatie_start[strlen(locatie_start)] = '\0';
+    locatie_curenta[strlen(locatie_curenta)] = '\0';
 
-    sprintf(sql, "SELECT SpeedLimit from Streets WHERE StreetName = '%s';",locatie_start);
+    sprintf(sql, "SELECT SpeedLimit from Streets WHERE StreetName = '%s';",locatie_curenta);
 
     fflush(stdout);
 
     sql[strlen(sql)] = '\0';
 
-    rc = sqlite3_exec(db, sql, callback, data, &zErrMsg);
+    rc = sqlite3_exec(db, sql, callback_without_name, data, &zErrMsg);
 
     fflush(stdout);
 
@@ -612,7 +722,7 @@ void send_speed_limit(char* msg_de_trimis)
     }
     else
     {
-        sprintf(msg_de_trimis,"LOC:Va aflati pe strada: %s, viteza maxima admisa este: %s", locatie_start, removeSpaces(data));
+        sprintf(msg_de_trimis,"LOC:Va aflati pe strada: %s, viteza maxima admisa este: %s", locatie_curenta, removeSpaces(data));
         msg_de_trimis[strlen(msg_de_trimis)] = '\0';
 
     }
@@ -637,7 +747,7 @@ int check_speed_limit(char *viteza)
     memset(data, 0 ,sizeof(data));
     memset(sql, 0, sizeof(data));
 
-    sprintf(sql, "SELECT SpeedLimit from Streets WHERE StreetName = '%s' and SpeedLimit < %s;",locatie_start, viteza);
+    sprintf(sql, "SELECT SpeedLimit from Streets WHERE StreetName = '%s' and SpeedLimit < %s;",locatie_curenta, viteza);
 
     fflush(stdout);
 
@@ -661,7 +771,7 @@ int check_speed_limit(char *viteza)
         return 1;
     }
     else
-    {     memset(data, 0 ,sizeof(data));
+    {   memset(data, 0 ,sizeof(data));
         memset(sql, 0, sizeof(data));
         return 0;
     }
@@ -672,13 +782,13 @@ void speed_advertisment(const char *primit, char* msg_de_trimis)
 {
 
     int viteza_ok = 0;
-    int viteza_int;
     memset(viteza, 0, sizeof(viteza));
     memset(msg_de_trimis, 0, sizeof(msg_de_trimis));
-
     fflush(stdout);
-    viteza_int = atoi(viteza);
+
     sprintf(viteza, "%s", primit+strlen(update_speed))+1;
+    viteza_int = atoi(viteza);
+    
     viteza_ok = check_speed_limit(viteza);
 
     if(viteza_ok == 1)
@@ -700,11 +810,13 @@ void add_event(const char *primit)
     int rc;
 
     fflush(stdout);
+    char carbon_copy[MSGSIZE];
+    strcpy(carbon_copy, primit);
     memset(data, 0, sizeof(data));
     memset(sql, 0, sizeof(sql));
     int timestamp = time(NULL);
 
-    sprintf(sql, "INSERT INTO Incidente (Incident, Timestamp) VALUES ('%s', %d);", primit+strlen(traffic_info)+1, timestamp);
+    sprintf(sql, "INSERT INTO Incidente (Incident, Timestamp) VALUES ('%s', %d);", carbon_copy+strlen(traffic_info)+1, timestamp);
     sql[strlen(sql)] = '\0';
 
     rc = sqlite3_exec(db, sql, callback, data, &zErrMsg);
@@ -861,7 +973,7 @@ int functie_sign_in(const char *primit, char *msg_de_trimis, int logat, char *us
             memset(data, 0, sizeof(data));
 
             sql[0] = 0;
-            hash_pass(pass);
+            hash_password(pass);
 
             sprintf(sql, "INSERT INTO Clienti (Username, Password, Options) VALUES('%s','%s',0);",username, pass);
             sql[strlen(sql)] = '\0';
@@ -893,7 +1005,7 @@ int functie_sign_in(const char *primit, char *msg_de_trimis, int logat, char *us
 
 int functie_login(const char *primit, char *msg_de_trimis, int logat, char*username)
 {
-    char pass[MSGSIZE];
+    char pass[100];
     char sql[MSGSIZE];
     char data[MSGSIZE];
     data[0] = 0;
@@ -908,7 +1020,7 @@ int functie_login(const char *primit, char *msg_de_trimis, int logat, char*usern
     else
     {
         get_lines(primit, username, pass);
-        hash_pass(pass);
+        hash_password(pass);
         sprintf(sql, "SELECT * from Clienti where Username = '%s' and Password = '%s';",username, pass);
         sql[strlen(sql)] = '\0';
         int rc;
@@ -945,7 +1057,7 @@ int functie_login(const char *primit, char *msg_de_trimis, int logat, char*usern
 
 }
 
-void hash_pass(char *pass)
+void hash_password(char *pass)
 {
     char ch;
     int key = 3;
@@ -983,9 +1095,9 @@ int functie_delogare(char *msg_de_trimis, char *username)
     return logat;
 }
 
-void update_speedlimit(const char *primit)
+void update_speedlimit_incident(const char *primit)
 {
-    char street[MSGSIZE];
+    char street[100];
     sprintf(street, "%s", get_streets(primit));
     char sql[MSGSIZE];
     char data[MSGSIZE];
@@ -993,7 +1105,7 @@ void update_speedlimit(const char *primit)
     sql[0] = 0;
     char *zErrMsg = 0;
 
-    sprintf(sql, "UPDATE Streets SET SpeedLimit = 20, Incident = 1 WHERE StreetName = '%s';", street);
+    sprintf(sql, "UPDATE Streets SET SpeedLimit = %d, Incident = 1 WHERE StreetName = '%s';",INCIDENT_SPEED_LIMIT,street);
     sql[strlen(sql)] = '\0';
     int rc;
     memset(data, 0, sizeof(data));
@@ -1030,8 +1142,11 @@ char *get_streets(const char *primit)
         printf("SQL error: %s\n", zErrMsg);
         sqlite3_free(zErrMsg);
     }
+    char carbon_copy[MSGSIZE];
+    memset(carbon_copy, 0, sizeof(carbon_copy));
+    strcpy(carbon_copy, primit);
 
-    return street_name(data, primit);
+    return street_name(data, carbon_copy);
     
 }
 
@@ -1052,7 +1167,7 @@ char* street_name(char *data, const char* primit)
 }
 
 
-void get_normal_speed()
+void set_normal_speed()
 {
     char sql[MSGSIZE];
     char data[MSGSIZE];
@@ -1075,26 +1190,96 @@ void get_normal_speed()
     
 }
 
-void update_noPeople(int nodeID)
+void update_cars_no(int nodeID, int increase)
 {
     char sql[MSGSIZE];
     char data[MSGSIZE];
     data[0] = 0;
     sql[0] = 0;
     char *zErrMsg = 0;
+    if(increase == 1)
+    {
+        sprintf(sql, "UPDATE Paths SET Cars = Cars+1 WHERE From_node = %d;", nodeID);
+        sql[strlen(sql)] = '\0';
+        int rc;
+        memset(data, 0, sizeof(data));
+        rc = sqlite3_exec(db, sql, callback_without_name, data, &zErrMsg);
+        fflush(stdout);
 
-    sprintf(sql, "UPDATE Paths SET Cars = Cars+1 WHERE From_node = %d;", nodeID);
-    sql[strlen(sql)] = '\0';
+        if( rc != SQLITE_OK)
+        {
+                printf("SQL error: %s\n", zErrMsg);
+                sqlite3_free(zErrMsg);
+        }   
+    }
+    else
+    {
+        sprintf(sql, "UPDATE Paths SET Cars = Cars-1 WHERE From_node = %d;", nodeID);
+        sql[strlen(sql)] = '\0';
+        int rc;
+        memset(data, 0, sizeof(data));
+        rc = sqlite3_exec(db, sql, callback_without_name, data, &zErrMsg);
+        fflush(stdout);
+
+        if( rc != SQLITE_OK)
+        {
+                printf("SQL error: %s\n", zErrMsg);
+                sqlite3_free(zErrMsg);
+        }   
+    }
+    update_speedlimit_aglomeration(nodeID);
+}
+
+
+int check_no_cars(int nodeID)
+{
+    char sql[MSGSIZE];
+    char data[MSGSIZE];
+    data[0] = 0;
+    sql[0] = 0;
+    char *zErrMsg = 0;
     int rc;
+
+    sprintf(sql, "SELECT Cars from Paths where From_node = %d;", nodeID);
+    sql[strlen(sql)] = '\0';
     memset(data, 0, sizeof(data));
     rc = sqlite3_exec(db, sql, callback_without_name, data, &zErrMsg);
     fflush(stdout);
 
     if( rc != SQLITE_OK)
     {
+        printf("SQL error: %s\n", zErrMsg);
+        sqlite3_free(zErrMsg);
+    }
+
+    return atoi(data);
+}
+
+
+void update_speedlimit_aglomeration(int nodeID)
+{
+
+    char sql[MSGSIZE];
+    char data[MSGSIZE];
+    data[0] = 0;
+    sql[0] = 0;
+    char *zErrMsg = 0;
+    int rc;
+    if(check_no_cars(nodeID) > NORMAL_TRAFIC)
+    {
+        sprintf(sql, "UPDATE Streets SET SpeedLimit = %d WHERE NodeID = '%d';",INCIDENT_SPEED_LIMIT,nodeID);
+        sql[strlen(sql)] = '\0';
+        
+        memset(data, 0, sizeof(data));
+        rc = sqlite3_exec(db, sql, callback_without_name, data, &zErrMsg);
+        fflush(stdout);
+
+        if( rc != SQLITE_OK)
+        {
             printf("SQL error: %s\n", zErrMsg);
             sqlite3_free(zErrMsg);
-    }   
+        }
+    }
 }
 
 
@@ -1119,4 +1304,268 @@ int get_nodeID(char *streetName)
             sqlite3_free(zErrMsg);
     }   
     return atoi(data);
+}
+
+
+int get_path_cost(int from_nodeID, int to_nodeID)
+{
+    int distance;
+    int incident;
+    int no_cars;
+    int cost;
+
+    distance = get_distance(from_nodeID, to_nodeID);
+    incident = get_incidents_points(to_nodeID);
+    no_cars = get_number_of_cars_points(to_nodeID);
+
+    return distance + incident + no_cars;
+}
+
+
+int get_distance(int from_nodeID, int to_nodeID)
+{
+    char sql[MSGSIZE];
+    char data[MSGSIZE];
+    data[0] = 0;
+    sql[0] = 0;
+    char *zErrMsg = 0;
+    int rc;
+
+    sprintf(sql, "SELECT Distance From Paths WHERE From_node = %d and To_node = %d;", from_nodeID, to_nodeID);
+    sql[strlen(sql)] = '\0';
+
+    memset(data, 0, sizeof(data));
+    rc = sqlite3_exec(db, sql, callback_without_name, data, &zErrMsg);
+    fflush(stdout);
+
+    if( rc != SQLITE_OK)
+    {
+            printf("SQL error: %s\n", zErrMsg);
+            sqlite3_free(zErrMsg);
+    }
+    if(strlen(data)>0)   
+        return atoi(data);
+    else 
+        return INFINIT;
+}
+
+
+int get_incidents_points(int to_nodeID)
+{
+    char sql[MSGSIZE];
+    char data[MSGSIZE];
+    data[0] = 0;
+    sql[0] = 0;
+    char *zErrMsg = 0;
+    int rc;
+
+    sprintf(sql, "SELECT Incident FROM Streets WHERE NodeID = %d;", to_nodeID);
+    sql[strlen(sql)] = '\0';
+
+    memset(data, 0, sizeof(data));
+    rc = sqlite3_exec(db, sql, callback_without_name, data, &zErrMsg);
+    fflush(stdout);
+
+    if( rc != SQLITE_OK)
+    {
+            printf("SQL error: %s\n", zErrMsg);
+            sqlite3_free(zErrMsg);
+    }   
+
+    if(atoi(data) == 0)
+        return 0;
+    else 
+        return INCIDENTS_POINTS;
+}
+
+
+int get_number_of_cars_points(int to_nodeID)
+{
+    char sql[MSGSIZE];
+    char data[MSGSIZE];
+    data[0] = 0;
+    sql[0] = 0;
+    char *zErrMsg = 0;
+    int rc;
+
+    sprintf(sql, "SELECT Cars from Paths where To_node = %d;", to_nodeID);
+    sql[strlen(sql)] = '\0';
+
+    memset(data, 0, sizeof(data));
+    rc = sqlite3_exec(db, sql, callback_without_name, data, &zErrMsg);
+    fflush(stdout);
+
+    if( rc != SQLITE_OK)
+    {
+            printf("SQL error: %s\n", zErrMsg);
+            sqlite3_free(zErrMsg);
+    }   
+    if(atoi(data) < NORMAL_TRAFIC)
+        return atoi(data);
+    else 
+        return INCIDENTS_POINTS;
+}
+
+void add_some_cars()
+{
+    char sql[MSGSIZE];
+    char data[MSGSIZE];
+    data[0] = 0;
+    sql[0] = 0;
+    char *zErrMsg = 0;
+    int rc;
+    int increase;
+    srand(time(NULL));
+    increase = rand()%2;
+
+    if(increase == 1)
+    {
+        srand(time(NULL));
+        sprintf(sql, "UPDATE Paths SET Cars = Cars+%d;", rand()%NORMAL_TRAFIC);
+        sql[strlen(sql)] = '\0';
+        memset(data, 0, sizeof(data));
+        rc = sqlite3_exec(db, sql, callback_without_name, data, &zErrMsg);
+        fflush(stdout);
+
+        if( rc != SQLITE_OK)
+        {
+                printf("SQL error: %s\n", zErrMsg);
+                sqlite3_free(zErrMsg);
+        }
+    }   
+    else
+    {
+        
+        srand(time(NULL));
+        sprintf(sql, "UPDATE Paths SET Cars = Cars-%d;", rand()%get_minim_cars());
+        sql[strlen(sql)] = '\0';
+        memset(data, 0, sizeof(data));
+        rc = sqlite3_exec(db, sql, callback_without_name, data, &zErrMsg);
+        fflush(stdout);
+
+        if( rc != SQLITE_OK)
+        {
+                printf("SQL error: %s\n", zErrMsg);
+                sqlite3_free(zErrMsg);
+        }
+    }
+    
+    //update speed limit for all
+
+    memset(sql, 0 ,sizeof(sql));
+    memset(sql, 0 ,sizeof(sql));
+
+    sprintf(sql, "SELECT MAX(NodeID) from Streets;");
+    sql[strlen(sql)] = '\0';
+    memset(data, 0, sizeof(data));
+    rc = sqlite3_exec(db, sql, callback_without_name, data, &zErrMsg);
+    fflush(stdout);
+
+    if( rc != SQLITE_OK)
+    {
+            printf("SQL error: %s\n", zErrMsg);
+            sqlite3_free(zErrMsg);
+    }   
+    for(int i=1; i<=atoi(data); i++)
+        update_speedlimit_aglomeration(i);
+}
+
+
+int get_minim_cars()
+{
+    char sql[MSGSIZE];
+    char data[MSGSIZE];
+    data[0] = 0;
+    sql[0] = 0;
+    char *zErrMsg = 0;
+    int rc;
+
+    srand(time(NULL));
+    sprintf(sql, "SELECT MIN(Cars) FROM Paths;");
+    sql[strlen(sql)] = '\0';
+    memset(data, 0, sizeof(data));
+    rc = sqlite3_exec(db, sql, callback_without_name, data, &zErrMsg);
+    fflush(stdout);
+
+    if( rc != SQLITE_OK)
+    {
+            printf("SQL error: %s\n", zErrMsg);
+            sqlite3_free(zErrMsg);
+    }   
+    return atoi(data);
+}
+
+
+void initializare_matrice_costuri(int Graph[][NODES])
+{
+    for(int i=1;i<=NODES;i++)
+    {
+        for(int j=1;j<=NODES; j++)
+            {Graph[i][j] = get_path_cost(i,j);
+            }
+    }
+}
+
+
+int dijkstra(int Graph[][NODES], int source, int target, int path[])
+{
+    initializare_matrice_costuri(Graph);
+    
+    memset(path, 0, sizeof(int)*NODES);
+    printf("%d, %d", source, target);
+    
+    int dist[NODES] = {0}, prev[NODES] = {0}, selected[NODES] = {0},min, start,d,m;
+
+    for(int i = 1;i<NODES;i++)
+    {
+        dist[i] = INFINIT;
+        prev[i] = -1;
+    }
+
+    start = source;
+    selected[start] = 1;
+    dist[start] = 0;
+
+    while(selected[target] == 0)
+    {
+        min = INFINIT;
+        m = 0;
+        for(int i=1;i < NODES;i++)
+        {
+            d = dist[start] + Graph[start][i];
+            if(d < dist[i] && selected[i] == 0)
+            {
+                dist[i] = d;
+                prev[i] = start;
+            }
+            if(min > dist[i] && selected[i] == 0)
+            {
+                min = dist[i];
+                m = i;
+            }
+        }
+        start = m;
+        selected[start] = 1;
+    }
+    start = target;
+    int j = 0;
+    path[j++] = source;
+    while(start != -1)
+    {
+        path[j++] = start;
+        start = prev[start];
+    }
+
+    int path_reverse[NODES];
+    int k;
+    for(int i=j;i>0;i--,k++)
+        path_reverse[k] = path[i];
+
+    for(int i=1;i<j;i++)
+        path[i] = path_reverse[i];
+      
+    for(int i=1;i<j;i++)
+        printf("Path:%d\n", path[i]); 
+
+    return j-2;
 }
