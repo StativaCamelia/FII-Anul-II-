@@ -89,6 +89,17 @@ const char meniu_dispay[] = "Meniu\n";
 
 //raspunsuri primite
 const char raspuns_stop[] = "STP";
+const char raspuns_login[] = "LOK";
+const char raspuns_destinatie[] = "DSE";
+const char raspuns_sing_in[] = "IOK";
+const char raspuns_quit[] = "QUI";
+const char raspuns_trafic_info[] = "TRF";
+const char raspuns_news[] = "NEW";
+const char raspuns_viteza[] = "SPD";
+const char raspuns_limita[] = "LOC";
+const char raspuns_final[] = "LOF";
+const char raspuns_utilizatori[] = "UTL";
+const char raspuns_log_out[] = "DLG";
 
 int getch()
 {
@@ -313,7 +324,7 @@ void check_if_car_started()
 {
   while(init_pozitie == 0)
   {
-    if((double)rand()/RAND_MAX < 0.33)
+    if((double)rand()/RAND_MAX < 0.5)
     {
       continue;
     }
@@ -323,7 +334,7 @@ void check_if_car_started()
       initializare_locatie();
       return;
     }
-    sleep(15);
+    sleep(30);
   }
 }
 
@@ -350,6 +361,7 @@ void *receive_function(void *arg)
       cancel = 1;
       break;
     }
+
     lungime_int = atoi(lungime_str);
     char *msg_primit = (char*)malloc(lungime_int);
     memset(msg_primit, 0, sizeof(msg_primit));
@@ -359,79 +371,81 @@ void *receive_function(void *arg)
       perror("[client] Eroare la citirea mesajului in server");
     }
 
-    if(strstr(msg_primit, "LOK")  != NULL)
+    if(strstr(msg_primit, raspuns_login)  != NULL)
     {
       logat = 1;
       main_meniu();
-      if((double)rand()/RAND_MAX < 0.33)
+      if((double)rand()/RAND_MAX < 0.5)
          send_stop();
       else
          initializare_locatie();
 
     }
+
     else if(strstr(msg_primit, raspuns_stop))
     {
       printf("%s\n", KRED);
       printf("NU SE POATE OBTINE LOCATIA------------------>\n");
       printf("%s\n", KNRM);
     }
-    else if(strstr(msg_primit, "DSE") != NULL)
+
+    else if(strstr(msg_primit, raspuns_destinatie) != NULL)
     {
       strcpy(locatie_stop, msg_primit+4);
       continue;
     }
-    else if(strstr(msg_primit, "IOK") != NULL)
+    else if(strstr(msg_primit, raspuns_sing_in) != NULL)
     {
       logat = 1;
       main_meniu();
-      if((double)rand()/RAND_MAX < 0.33)
+      if((double)rand()/RAND_MAX < 0.5)
       send_stop();
       else
       initializare_locatie();
     }
-    else if(strstr(msg_primit, "QUI") != NULL)
+    else if(strstr(msg_primit, raspuns_quit) != NULL)
     {
       cancel = 1;
       close(sock_d);
     }
-    else if(strstr(msg_primit, "TRF") != NULL)
+    else if(strstr(msg_primit, raspuns_trafic_info) != NULL)
     {
       printf("%s\n", KRED);
       printf("AVERTISMENT------------------>\n");
       printf("%s\n", KNRM);
     }
-    else if(strstr(msg_primit, "NEW") != NULL)
+    else if(strstr(msg_primit, raspuns_news) != NULL)
     {
       printf("%s\n", KBLU);
       printf("NEWS------------------------------->\n");
       printf("%s\n", KNRM);
     }
-    else if(strstr(msg_primit, "SPD") != NULL)
+    else if(strstr(msg_primit, raspuns_viteza) != NULL)
     {
       printf("%s\n", KRED);
       printf("AVERTISMENT VITEZA------------------>\n");
       printf("%s\n", KNRM);
     }
-    else if(strstr(msg_primit, "LOC") != NULL)
+    else if(strstr(msg_primit, raspuns_limita) != NULL)
     {
       printf("%s\n", KCYN);
       printf("VITEZA MAXIMA ADMISA---------------->\n");
       printf("%s\n", KNRM);
     }
-    else if(strstr(msg_primit, "LOF") != NULL)
+    else if(strstr(msg_primit, raspuns_final) != NULL)
     {
-      if((double)rand()/RAND_MAX < 0.33)
+      if((double)rand()/RAND_MAX < 0.5)
          send_stop();
       else
         reinitializare_locatie(msg_primit+3);
     }
-    else if(strstr(msg_primit, "UTL") !=NULL)
+    else if(strstr(msg_primit, raspuns_utilizatori) !=NULL)
     {
       printf("%s\n", KCYN);
       printf("Numarul de utilizatori---------------->\n");
       printf("%s\n", KNRM);
     }
-    else if(strstr(msg_primit, "DLG") != NULL)
+    else if(strstr(msg_primit, raspuns_log_out) != NULL)
     {
       logat = 0;
     }
@@ -677,7 +691,7 @@ void main_meniu()
   printf("Alegeti o destinatie(Destinatie)\n");
   printf("Trimite un eveniment din trafic (Trafic info)\n");
   printf("Introduceti locatii favorite(Locatie favorita)\n");
-  printf("Abonare la news(Update Settings)\n");
+  printf("Abonare la news(Update settings)\n");
   printf("Log out\n");
   printf("\n");
   printf("Quit\n");
