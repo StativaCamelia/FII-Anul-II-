@@ -20,6 +20,12 @@
 #define INCIDENT_SPEED_LIMIT 20
 #define INFINIT 10e+8
 #define NODES 11
+
+#define KBLU  "\x1B[34m"
+#define KNRM  "\x1B[0m"
+#define KCYN  "\x1B[36m"
+#define KRED  "\x1B[31m"
+
 pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 
 
@@ -347,9 +353,10 @@ void *parcurgere_traseu(void *sock)
     float status_parcurs_per_strada = 0;
     int distance;
     char next_street[MSGSIZE];
+    char temp[MSGSIZE];
 
     while(cancel == 0)
-    {  
+    {
         if(start_route >= 0 && logat == 1)
         {    
             printf("%s, %s, %s\n", locatie_start, locatie_curenta, locatie_stop);
@@ -367,7 +374,12 @@ void *parcurgere_traseu(void *sock)
                     get_name(status_parcurs_total+1, next_street);
                     sprintf(msg_de_trimis, "TRF: Se circula greu datorita aglomeratiei pe strada %s", next_street);
                     msg_de_trimis[strlen(msg_de_trimis)] = '\0';
-                    send_function(msg_de_trimis);
+                    if(strcmp(temp, msg_de_trimis) == 0)
+                        {
+                            send_function(msg_de_trimis);
+                            memset(temp, 0, sizeof(temp));
+                            strcpy(temp, msg_de_trimis);
+                        }
             }
             if(start_route == 0)
             {
@@ -408,7 +420,7 @@ void *parcurgere_traseu(void *sock)
                 else
                 {   printf("Distance:%f", status_parcurs_per_strada + (float)viteza_int*0.06);
                     status_parcurs_per_strada = status_parcurs_per_strada + (float)viteza_int*0.06;
-                    sleep(10);
+                    sleep(60);
                 }
             }
 
@@ -430,7 +442,7 @@ void get_incidents(char* incidents, int last_check)
 
     sprintf(sql, "SELECT Incident FROM Incidente WHERE Timestamp > %d;\0", last_check);
 
-    rc = sqlite3_exec(db, sql, callback, data, &zErrMsg);
+    rc = sqlite3_exec(db, sql, callback_without_name, data, &zErrMsg);
 
     fflush(stdout);
 
@@ -473,7 +485,7 @@ void *send_incidents_function(void *sock)
             last_check = current_time+1;
         }
         }
-        sleep(5);
+        sleep(15);
         current_time = time(NULL);
     }
     }
@@ -784,7 +796,13 @@ void set_destination(const char* primit, char* msg_de_trimis, char* username)
     char work[MSGSIZE];
     get_line(primit, possible_dest);
     
-    if(check_street_exists(possible_dest))
+       if(strstr(possible_dest, locatie_curenta) != NULL)
+    {
+        sprintf(msg_de_trimis,"DST: Va aflati deja de strada %s ", locatie_curenta);
+        msg_de_trimis[strlen(msg_de_trimis)] = '\0';
+        send_function(msg_de_trimis);
+    }
+    else if(check_street_exists(possible_dest))
     {
         memset(locatie_stop, 0, sizeof(locatie_stop));
         strcpy(locatie_stop, possible_dest);
@@ -1076,6 +1094,7 @@ void speed_advertisment(const char *primit, char* msg_de_trimis)
 {
 
     int viteza_ok = 0;
+    char temp[MSGSIZE];
 
     memset(viteza, 0, sizeof(viteza));
     memset(msg_de_trimis, 0, sizeof(msg_de_trimis));
@@ -1089,7 +1108,12 @@ void speed_advertisment(const char *primit, char* msg_de_trimis)
     {
         sprintf(msg_de_trimis, "SPD:Ati depasit viteza de limita impusa pe sectorul de drum: %s", locatie_curenta);
         msg_de_trimis[strlen(msg_de_trimis)] = '\0';
-        send_function(msg_de_trimis);
+        if(strcmp(msg_de_trimis, temp) != 0)
+            {
+                memset(temp, 0, sizeof(temp));
+                strcpy(temp, msg_de_trimis);
+                send_function(msg_de_trimis);
+            }
     }
 }
 
@@ -1108,7 +1132,7 @@ int add_event(const char *primit)
         send_function(msg_de_trimis);
         return 0;
     }
-    else if(strcmp(type, "Accident") == 0 && strcmp(type, "Aglomeratie") == 0 && strcmp(type, "Trafic normal") == NULL)
+    else if(strcmp(type, "Accident") != 0 && strcmp(type, "Aglomeratie") != 0 && strcmp(type, "Trafic normal") != 0)
     {
         char msg_de_trimis[MSGSIZE];
         sprintf(msg_de_trimis, "ERR: Tipul de eveniment introdus nu exista");
@@ -1318,6 +1342,15 @@ int functie_sign_in(const char *primit, char *msg_de_trimis, int logat, char *us
 
     msg_de_trimis[strlen(msg_de_trimis)] = '\0';
     send_function(msg_de_trimis);
+    if(logat == 0)
+    {
+        //trimite numarul de utilizatori
+        memset(msg_de_trimis, 0, sizeof(msg_de_trimis));
+        sprintf(msg_de_trimis, "UTL:%d utilizatori in apropiere", uid-11);
+        msg_de_trimis[strlen(msg_de_trimis)] = '\0';
+        send_function(msg_de_trimis);
+    }
+
     return logat;
 }
 
@@ -1372,6 +1405,13 @@ int functie_login(const char *primit, char *msg_de_trimis, int logat, char*usern
     memset(sql, 0, sizeof(sql));
     msg_de_trimis[strlen(msg_de_trimis)] = '\0';
     send_function(msg_de_trimis);
+    if(logat == 1)
+    {
+        memset(msg_de_trimis, 0, sizeof(msg_de_trimis));
+        sprintf(msg_de_trimis, "UTL:%d utilizatori in apropiere", uid-11);
+        msg_de_trimis[strlen(msg_de_trimis)] = '\0';
+        send_function(msg_de_trimis);
+    }
     return logat;
 
 }
